@@ -1,8 +1,241 @@
 // 富媒体编辑：文本 / 图片 / 视频 / 思维导图 / 手绘
 // 思维导图与手绘以 <div data-widget="mindmap|draw"> 嵌入正文，数据存于 content_json，可再次编辑。
 import { h as el } from './core/dom.js';
+import { askText } from './core/prompt.js';
 
 const uid = () => 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+// ---------- 无限画布视口 ----------
+// 支持：滚轮缩放（以指针为中心）、拖拽空白处或按住空格/中键平移、缩放按钮、适应窗口、重置
+const MIN_SCALE = 0.1;
+const MAX_SCALE = 8;
+
+function createViewport({ isDraw = false, onPanStart } = {}) {
+  const viewport = el('div', { class: 'canvas-viewport' + (isDraw ? ' is-draw' : '') });
+  const inner = el('div', { class: 'mm-viewport-inner' });
+  const badge = el('div', { class: 'zoom-badge', text: '100%' });
+  viewport.append(inner, badge);
+
+  const view = { scale: 1, x: 0, y: 0 };
+
+  function apply() {
+    inner.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.scale})`;
+    badge.textContent = Math.round(view.scale * 100) + '%';
+  }
+
+  // 内容尺寸：优先取 inner 自身；若内容为绝对定位导致塌陷，则退化为子元素最大包围盒
+  const innerSize = () => {
+    if (inner.offsetWidth && inner.offsetHeight) return { w: inner.offsetWidth, h: inner.offsetHeight };
+    let w = 0, h = 0;
+    for (const child of inner.children) {
+      if (child.offsetWidth || child.offsetHeight) {
+        w = Math.max(w, child.offsetLeft + child.offsetWidth);
+        h = Math.max(h, child.offsetTop + child.offsetHeight);
+      }
+    }
+    return { w, h };
+  };
+  // 内容原点相对 inner 边框盒左上角的偏移（padding 部分）
+  const contentOffset = () => ({
+    x: inner.offsetLeft - inner.clientLeft,
+    y: inner.offsetTop - inner.clientTop,
+  });
+
+  // 内容参照元素：优先用显式指定的内容元素（如 canvas），否则用 inner
+  let contentEl = null;
+  const setContentEl = (elm) => { contentEl = elm; };
+
+  // 屏幕坐标 → 内容坐标
+  // 基准取内容元素自身的屏幕矩形：它已经包含了 translate/scale 的全部效果，
+  // 因此只需 (client - rect.left) / scale 即为内容坐标，无需再单独减平移或 padding。
+  function toContent(clientX, clientY) {
+    const target = contentEl || inner;
+    const r = target.getBoundingClientRect();
+    return {
+      x: (clientX - r.left) / view.scale,
+      y: (clientY - r.top) / view.scale,
+    };
+  }
+
+  function fitToWindow() {
+    const { w, h } = innerSize();
+    if (!w || !h) return;
+    const vw = viewport.clientWidth;
+    const vh = viewport.clientHeight;
+    view.scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, Math.min((vw - 60) / w, (vh - 60) / h, 1)));
+    view.x = (vw - w * view.scale) / 2;
+    view.y = (vh - h * view.scale) / 2;
+    apply();
+  }
+
+  function centerOnContent() {
+    fitToWindow();
+  }
+
+  // 以屏幕坐标 (sx, sy) 为锚点缩放
+  function zoomAt(nextScale, sx, sy) {
+    const s = Math.min(MAX_SCALE, Math.max(MIN_SCALE, nextScale));
+    const r = viewport.getBoundingClientRect();
+    const px = sx - r.left;
+    const py = sy - r.top;
+    const k = s / view.scale;
+    view.x = px - (px - view.x) * k;
+    view.y = py - (py - view.y) * k;
+    view.scale = s;
+    apply();
+  }
+
+  viewport.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+    zoomAt(view.scale * factor, e.clientX, e.clientY);
+  }, { passive: false });
+
+  // 平移：中键、空格+左键，或非绘图模式下的左键拖拽
+  let panning = null;
+  let spaceDown = false;
+  const onKeyDown = (e) => { if (e.code === 'Space' && e.target === document.body) spaceDown = true; };
+  const onKeyUp = (e) => { if (e.code === 'Space') spaceDown = false; };
+  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('keyup', onKeyUp);
+
+  viewport.addEventListener('pointerdown', (e) => {
+    const isMiddle = e.button === 1;
+    const wantPan = isMiddle || spaceDown || (!isDraw && e.button === 0);
+    if (!wantPan) return;
+    e.preventDefault();
+    e.stopPropagation();
+    panning = { sx: e.clientX, sy: e.clientY, ox: view.x, oy: view.y };
+    viewport.classList.add('panning');
+    try { viewport.setPointerCapture?.(e.pointerId); } catch { /* 合成事件无活动指针 */ }
+  });
+  viewport.addEventListener('pointermove', (e) => {
+    if (!panning) return;
+    view.x = panning.ox + (e.clientX - panning.sx);
+    view.y = panning.oy + (e.clientY - panning.sy);
+    apply();
+  });
+  const endPan = (e) => {
+    if (!panning) return;
+    panning = null;
+    viewport.classList.remove('panning');
+    try { viewport.releasePointerCapture?.(e.pointerId); } catch { /* 忽略 */ }
+  };
+  viewport.addEventListener('pointerup', endPan);
+  viewport.addEventListener('pointercancel', endPan);
+
+  const controls = el('div', { class: 'row-gap' },
+    el('button', { text: '−', title: '缩小', onclick: () => zoomAt(view.scale / 1.2, viewport.getBoundingClientRect().left + viewport.clientWidth / 2, viewport.getBoundingClientRect().top + viewport.clientHeight / 2) }),
+    el('button', { text: '+', title: '放大', onclick: () => zoomAt(view.scale * 1.2, viewport.getBoundingClientRect().left + viewport.clientWidth / 2, viewport.getBoundingClientRect().top + viewport.clientHeight / 2) }),
+    el('button', { text: '适应', title: '适应窗口', onclick: () => fitToWindow() }),
+    el('button', { text: '100%', title: '还原比例', onclick: () => { view.scale = 1; apply(); } }),
+  );
+
+  function dispose() {
+    window.removeEventListener('keydown', onKeyDown);
+    window.removeEventListener('keyup', onKeyUp);
+  }
+
+  return { viewport, inner, view, apply, controls, zoomAt, fitToWindow, centerOnContent, toContent, setContentEl, dispose };
+}
+
+// ---------- 绘图元素（笔迹 / 文字） ----------
+// 统一数据结构：{ type: 'stroke', color, size, points: [[x,y],...] }
+//               { type: 'text', x, y, text, color, size }
+// 旧数据没有 type 字段，按笔迹处理
+
+const isText = (it) => it.type === 'text';
+
+function itemBBox(it) {
+  if (isText(it)) {
+    const fs = it.size * 4;
+    const w = Math.max(fs, it.text.length * fs * 1);
+    return { x0: it.x, y0: it.y - fs, x1: it.x + w, y1: it.y + fs * 0.3 };
+  }
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const p of it.points) {
+    if (p[0] < x0) x0 = p[0];
+    if (p[1] < y0) y0 = p[1];
+    if (p[0] > x1) x1 = p[0];
+    if (p[1] > y1) y1 = p[1];
+  }
+  if (!Number.isFinite(x0)) return null;
+  const pad = it.size / 2;
+  return { x0: x0 - pad, y0: y0 - pad, x1: x1 + pad, y1: y1 + pad };
+}
+
+function bboxOf(items) {
+  let r = null;
+  for (const it of items) {
+    const b = itemBBox(it);
+    if (!b) continue;
+    if (!r) r = { ...b };
+    else {
+      r.x0 = Math.min(r.x0, b.x0); r.y0 = Math.min(r.y0, b.y0);
+      r.x1 = Math.max(r.x1, b.x1); r.y1 = Math.max(r.y1, b.y1);
+    }
+  }
+  return r;
+}
+
+function hitItem(it, x, y, tol) {
+  if (isText(it)) {
+    const b = itemBBox(it);
+    return x >= b.x0 - tol && x <= b.x1 + tol && y >= b.y0 - tol && y <= b.y1 + tol;
+  }
+  const t = tol + (it.size || 1) / 2;
+  for (const p of it.points) {
+    const dx = p[0] - x, dy = p[1] - y;
+    if (dx * dx + dy * dy <= t * t) return true;
+  }
+  // 线段的粗检测（点稀疏时也能命中）
+  for (let i = 1; i < it.points.length; i++) {
+    if (distToSegment(x, y, it.points[i - 1], it.points[i]) <= t) return true;
+  }
+  return false;
+}
+
+function distToSegment(px, py, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const len2 = dx * dx + dy * dy;
+  if (!len2) return Math.hypot(px - a[0], py - a[1]);
+  let t = ((px - a[0]) * dx + (py - a[1]) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (a[0] + t * dx), py - (a[1] + t * dy));
+}
+
+// 绘制单个元素到 2D 上下文
+function paintItem(ctx, it) {
+  if (isText(it)) {
+    ctx.fillStyle = it.color || '#1c1b19';
+    ctx.font = `600 ${it.size * 4}px "Segoe UI","Microsoft YaHei",sans-serif`;
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(it.text, it.x, it.y);
+    return;
+  }
+  if (!it.points || !it.points.length) return;
+  ctx.strokeStyle = it.color;
+  ctx.lineWidth = it.size;
+  if (it.points.length === 1) {
+    ctx.fillStyle = it.color;
+    ctx.beginPath();
+    ctx.arc(it.points[0][0], it.points[0][1], it.size / 2, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  ctx.beginPath();
+  it.points.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
+  ctx.stroke();
+}
+
+function moveItem(it, dx, dy) {
+  if (isText(it)) {
+    it.x += dx;
+    it.y += dy;
+  } else {
+    it.points = it.points.map((p) => [p[0] + dx, p[1] + dy]);
+  }
+}
 
 // ---------- 思维导图 ----------
   function mindmapToTree(map) {
@@ -84,13 +317,13 @@ const uid = () => 'w' + Date.now().toString(36) + Math.random().toString(36).sli
 
     let resolve;
     const done = new Promise((r) => (resolve = r));
-    const body = el('div');
-    body.append(el('h2', { text: '思维导图' }));
-    const treeWrap = el('div', {
-      style: { border: '1px solid var(--line)', borderRadius: '6px', padding: '14px', minHeight: '220px', maxHeight: '52vh', overflow: 'auto', background: '#fff' },
-    });
-    const hint = el('p', { class: 'hint', text: '单击节点选中；双击修改文字；选中后按 Tab 新建子节点，Enter 新建同级节点，Delete 删除。' });
-    const toolbar = el('div', { class: 'row-gap', style: { marginTop: '10px' } },
+    const body = el('div', { class: 'editor-shell' });
+
+    // 无限画布：滚轮缩放、拖拽空白平移
+    const vp = createViewport({ isDraw: false });
+
+    const hint = el('p', { class: 'hint', text: '单击节点选中；双击修改文字；Tab 新建子节点，Enter 新建同级；滚轮缩放，拖拽空白平移' });
+    const toolbar = el('div', { class: 'row-gap' },
       el('button', { text: '+ 子节点', onclick: () => addNode(false) }),
       el('button', { text: '+ 同级节点', onclick: () => addNode(true) }),
       el('button', { text: '删除节点', onclick: () => removeNode() }),
@@ -98,10 +331,12 @@ const uid = () => 'w' + Date.now().toString(36) + Math.random().toString(36).sli
     );
 
     function draw() {
-      treeWrap.innerHTML = '';
+      vp.inner.innerHTML = '';
       const host = renderMindmap({ nodes: state.nodes });
-      treeWrap.append(host.firstChild);
-      treeWrap.querySelectorAll('.mm-node').forEach((n) => {
+      host.style.display = 'inline-block';
+      host.style.margin = '40px';
+      vp.inner.append(host);
+      vp.inner.querySelectorAll('.mm-node').forEach((n) => {
         if (n.dataset.id === selected) n.classList.add('active');
         n.addEventListener('click', (e) => { e.stopPropagation(); selected = n.dataset.id; draw(); });
         n.addEventListener('dblclick', (e) => {
@@ -177,13 +412,17 @@ const uid = () => 'w' + Date.now().toString(36) + Math.random().toString(36).sli
       if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); removeNode(); }
     });
 
-    body.append(treeWrap, hint, toolbar);
-
-    const footer = el('div', { class: 'modal-foot' },
-      el('button', { text: '取消', onclick: () => close(null) }),
-      el('button', { class: 'primary', text: '确定', onclick: () => close({ id: data ? data.id : uid(), kind: 'mindmap', nodes: state.nodes, rootId: state.rootId }) }),
+    body.append(
+      el('div', { class: 'editor-shell-head' },
+        el('h2', { text: '思维导图' }),
+        el('div', { class: 'editor-shell-tools' }, toolbar, vp.controls)),
+      el('div', { class: 'editor-shell-body' }, vp.viewport),
+      el('div', { class: 'editor-shell-foot' },
+        hint,
+        el('div', { class: 'row-gap' },
+          el('button', { text: '取消', onclick: () => close(null) }),
+          el('button', { class: 'primary', text: '确定', onclick: () => close({ id: data ? data.id : uid(), kind: 'mindmap', nodes: state.nodes, rootId: state.rootId }) }))),
     );
-    body.append(footer);
     draw();
 
     const modal = document.getElementById('modal');
@@ -191,12 +430,14 @@ const uid = () => 'w' + Date.now().toString(36) + Math.random().toString(36).sli
     const hostModalBody = modal.firstElementChild;
     hostModalBody.innerHTML = '';
     hostModalBody.append(body);
-    modal.classList.add('wide');
+    modal.classList.add('wide', 'editor-modal');
     mask.classList.remove('hidden');
+    requestAnimationFrame(() => requestAnimationFrame(() => vp.fitToWindow()));
 
     function close(result) {
+      vp.dispose();
       mask.classList.add('hidden');
-      modal.classList.remove('wide');
+      modal.classList.remove('wide', 'editor-modal');
       hostModalBody.innerHTML = '';
       document.removeEventListener('keydown', onKey);
       resolve(result);
@@ -212,78 +453,386 @@ const uid = () => 'w' + Date.now().toString(36) + Math.random().toString(36).sli
   function openDrawEditor(data) {
     let resolve;
     const done = new Promise((r) => (resolve = r));
-    const W = 1000;
-    const H = 620;
-    const canvas = el('canvas', { width: W, height: H, style: { width: '100%', display: 'block', background: '#fff', borderRadius: '6px', cursor: 'crosshair', border: '1px solid var(--line)', touchAction: 'none' } });
+
+    // 无限画布：画布按内容范围动态扩展，支持滚动缩放与平移
+    const vp = createViewport({ isDraw: true });
+
+    // 背景层：绘制所有元素；叠加层：选择框、选中高亮、橡皮轨迹
+    const canvas = el('canvas', { width: 1, height: 1, style: { display: 'block' } });
     const ctx = canvas.getContext('2d');
-    let strokes = data && data.strokes ? JSON.parse(JSON.stringify(data.strokes)) : [];
+    vp.setContentEl(canvas);
+    const overlay = el('canvas', { width: 1, height: 1, style: { display: 'block', pointerEvents: 'none', position: 'absolute', top: 0, left: 0 } });
+    const octx = overlay.getContext('2d');
+    vp.inner.append(canvas, overlay);
+
+    // 兼容旧数据：无 type 的视为笔迹
+    let items = (data && data.strokes ? JSON.parse(JSON.stringify(data.strokes)) : [])
+      .map((s) => (s.type ? s : { ...s, type: 'stroke' }));
     let color = '#1c1b19';
     let size = 2.5;
-    let drawing = null;
+    let tool = 'pen';            // pen | eraser | select | text
+    let drawing = null;          // 当前笔迹
+    let erasing = null;          // 橡皮轨迹
+    let selection = null;        // { x0,y0,x1,y1 } 逻辑坐标
+    let selected = [];           // 选中的元素引用
+    let moving = null;           // { last: [x,y] }
+    let marquee = null;          // 框选起点
+    let bounds = { x0: 0, y0: 0, x1: 1000, y1: 600 };
+    let toastTimer = null;
 
-    function redraw() {
-      ctx.fillStyle = '#fff';
-      ctx.fillRect(0, 0, W, H);
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      for (const s of strokes) {
-        if (!s.points.length) continue;
-        ctx.strokeStyle = s.color;
-        ctx.lineWidth = s.size;
-        if (s.points.length === 1) {
-          ctx.fillStyle = s.color;
-          ctx.beginPath();
-          ctx.arc(s.points[0][0], s.points[0][1], s.size / 2, 0, Math.PI * 2);
-          ctx.fill();
-          continue;
-        }
-        ctx.beginPath();
-        s.points.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
-        ctx.stroke();
+    const hintEl = el('p', { class: 'hint', text: '' });
+
+    // 画布像素坐标即 toContent 的返回结果：缩放/平移后仍精确对应屏幕位置。
+    // 画布原点固定 (0,0)，只按需向右/下扩展，因此左上角永不移动，坐标换算稳定。
+    // 初始画布尺寸由视口决定（首屏铺满绘制区），之后只扩展不收缩；视口未就绪时用兜底值。
+    let baseSize = null;
+    function ensureBaseSize() {
+      if (baseSize) return baseSize;
+      const vw = vp.viewport.clientWidth || 1200;
+      const vh = vp.viewport.clientHeight || 700;
+      baseSize = {
+        w: Math.max(900, Math.ceil(vw / 100) * 100),
+        h: Math.max(500, Math.ceil(vh / 100) * 100),
+      };
+      return baseSize;
+    }
+
+    function computeBounds() {
+      const b = bboxOf(items);
+      const pad = 200;
+      const base = ensureBaseSize();
+      if (!b) bounds = { x0: 0, y0: 0, x1: base.w, y1: base.h };
+      else {
+        // items 里存的就是画布像素坐标，直接据此取范围
+        bounds = {
+          x0: 0,
+          y0: 0,
+          x1: Math.max(base.w, Math.ceil((b.x1 + pad) / 200) * 200),
+          y1: Math.max(base.h, Math.ceil((b.y1 + pad) / 200) * 200),
+        };
       }
     }
 
+    // 屏幕 → 画布像素坐标
     const pos = (e) => {
-      const r = canvas.getBoundingClientRect();
-      return [Math.round((e.clientX - r.left) * (W / r.width)), Math.round((e.clientY - r.top) * (H / r.height))];
+      const p = vp.toContent(e.clientX, e.clientY);
+      return [Math.round(p.x), Math.round(p.y)];
     };
-    canvas.addEventListener('pointerdown', (e) => {
-      canvas.setPointerCapture(e.pointerId);
-      drawing = { color, size, points: [pos(e)] };
-      strokes.push(drawing);
-      redraw();
-    });
-    canvas.addEventListener('pointermove', (e) => {
-      if (!drawing) return;
-      drawing.points.push(pos(e));
-      redraw();
-    });
-    const end = () => { drawing = null; };
-    canvas.addEventListener('pointerup', end);
-    canvas.addEventListener('pointercancel', end);
 
+    function resizeCanvases() {
+      const w = Math.max(1, Math.ceil(bounds.x1 - bounds.x0));
+      const h = Math.max(1, Math.ceil(bounds.y1 - bounds.y0));
+      for (const c of [canvas, overlay]) {
+        if (c.width !== w || c.height !== h) {
+          c.width = w;
+          c.height = h;
+          c.style.width = w + 'px';
+          c.style.height = h + 'px';
+        }
+      }
+    }
+
+    function redraw() {
+      computeBounds();
+      resizeCanvases();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      for (const it of items) paintItem(ctx, it);
+      drawOverlay();
+    }
+
+    // 叠加层：选中高亮 / 框选框 / 橡皮轨迹
+    function drawOverlay() {
+      octx.setTransform(1, 0, 0, 1, 0, 0);
+      octx.clearRect(0, 0, overlay.width, overlay.height);
+      const s = vp.view.scale || 1;
+
+      if (selection) {
+        octx.save();
+        octx.strokeStyle = '#b08d57';
+        octx.lineWidth = 1.5 / s;
+        octx.setLineDash([6 / s, 4 / s]);
+        octx.strokeRect(selection.x0, selection.y0, selection.x1 - selection.x0, selection.y1 - selection.y0);
+        octx.fillStyle = 'rgba(176,141,87,.10)';
+        octx.fillRect(selection.x0, selection.y0, selection.x1 - selection.x0, selection.y1 - selection.y0);
+        octx.restore();
+      }
+      if (marquee) {
+        const x = Math.min(marquee.x0, marquee.x1), y = Math.min(marquee.y0, marquee.y1);
+        const w = Math.abs(marquee.x1 - marquee.x0), hh = Math.abs(marquee.y1 - marquee.y0);
+        octx.save();
+        octx.strokeStyle = '#33557e';
+        octx.lineWidth = 1.5 / s;
+        octx.setLineDash([5 / s, 3 / s]);
+        octx.strokeRect(x, y, w, hh);
+        octx.fillStyle = 'rgba(51,85,126,.08)';
+        octx.fillRect(x, y, w, hh);
+        octx.restore();
+      }
+      if (erasing && erasing.length) {
+        octx.save();
+        octx.strokeStyle = 'rgba(164,72,63,.45)';
+        octx.lineWidth = 10 / s;
+        octx.lineCap = 'round';
+        octx.lineJoin = 'round';
+        octx.beginPath();
+        erasing.forEach((p, i) => (i ? octx.lineTo(p[0], p[1]) : octx.moveTo(p[0], p[1])));
+        octx.stroke();
+        octx.restore();
+      }
+    }
+
+    const tol = () => 6 / (vp.view.scale || 1);
+
+    function updateHint() {
+      const texts = {
+        pen: '滚轮缩放 · 拖拽空白处平移 · 画布随笔迹自动扩展',
+        eraser: '在笔迹上拖动即可擦除',
+        select: '拖拽框选 · 拖动选中区域可移动 · Delete 删除 · Esc 取消选择',
+        text: '在画布上点击即可输入文字',
+      };
+      hintEl.textContent = texts[tool] || '';
+    }
+
+    function toastMsg(msg) {
+      hintEl.textContent = msg;
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(updateHint, 1400);
+    }
+
+    function setTool(next) {
+      tool = next;
+      selection = null;
+      selected = [];
+      vp.viewport.classList.toggle('is-draw', next === 'pen' || next === 'eraser');
+      vp.viewport.style.cursor = next === 'select' ? 'default' : next === 'text' ? 'text' : '';
+      toolButtons.forEach((b) => b.classList.toggle('active', b.dataset.tool === next));
+      drawOverlay();
+      updateHint();
+    }
+
+    // 选中框内包含的元素（包围盒相交即算选中）
+    function itemsInRect(rect) {
+      const x0 = Math.min(rect.x0, rect.x1), x1 = Math.max(rect.x0, rect.x1);
+      const y0 = Math.min(rect.y0, rect.y1), y1 = Math.max(rect.y0, rect.y1);
+      return items.filter((it) => {
+        const b = itemBBox(it);
+        if (!b) return false;
+        return b.x0 <= x1 && b.x1 >= x0 && b.y0 <= y1 && b.y1 >= y0;
+      });
+    }
+
+    function itemsAt(x, y) {
+      for (let i = items.length - 1; i >= 0; i--) {
+        if (hitItem(items[i], x, y, tol())) return items[i];
+      }
+      return null;
+    }
+
+    function eraseAt(x, y) {
+      const before = items.length;
+      items = items.filter((it) => !hitItem(it, x, y, 6 + (it.size || 1) / 2));
+      if (items.length !== before) redraw();
+    }
+
+    async function addTextAt(x, y, clientX, clientY) {
+      const value = await askText({ title: '输入文字', placeholder: '文字内容', x: clientX, y: clientY });
+      if (value === null) return;
+      const text = value.trim();
+      if (!text) return;
+      items.push({ type: 'text', x, y, text, color, size: Math.max(2, size) });
+      redraw();
+    }
+
+    function deleteSelected() {
+      if (!selected.length) return;
+      const set = new Set(selected);
+      items = items.filter((it) => !set.has(it));
+      selected = [];
+      selection = null;
+      redraw();
+      toastMsg('已删除');
+    }
+
+    vp.viewport.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return; // 中键交给视口平移
+      e.stopPropagation();
+      try { vp.viewport.setPointerCapture?.(e.pointerId); } catch { /* 合成事件 */ }
+      const p = pos(e);
+
+      if (tool === 'pen') {
+        drawing = { type: 'stroke', color, size, points: [p] };
+        items.push(drawing);
+        redraw();
+        return;
+      }
+      if (tool === 'eraser') {
+        erasing = [p];
+        eraseAt(p[0], p[1]);
+        return;
+      }
+      if (tool === 'text') {
+        addTextAt(p[0], p[1], e.clientX, e.clientY);
+        return;
+      }
+
+      // select
+      if (selection && p[0] >= selection.x0 && p[0] <= selection.x1 && p[1] >= selection.y0 && p[1] <= selection.y1) {
+        moving = { last: p };
+        return;
+      }
+      const hit = itemsAt(p[0], p[1]);
+      if (hit) {
+        const b = itemBBox(hit);
+        selection = { x0: b.x0 - 4, y0: b.y0 - 4, x1: b.x1 + 4, y1: b.y1 + 4 };
+        selected = [hit];
+        moving = { last: p };
+        drawOverlay();
+        return;
+      }
+      marquee = { x0: p[0], y0: p[1], x1: p[0], y1: p[1] };
+      selection = null;
+      selected = [];
+      drawOverlay();
+    });
+
+    vp.viewport.addEventListener('pointermove', (e) => {
+      const p = pos(e);
+      if (drawing) {
+        drawing.points.push(p);
+        redraw();
+        return;
+      }
+      if (erasing) {
+        erasing.push(p);
+        eraseAt(p[0], p[1]);
+        drawOverlay();
+        return;
+      }
+      if (moving) {
+        const dx = p[0] - moving.last[0];
+        const dy = p[1] - moving.last[1];
+        if (dx || dy) {
+          for (const it of selected) moveItem(it, dx, dy);
+          selection = { x0: selection.x0 + dx, y0: selection.y0 + dy, x1: selection.x1 + dx, y1: selection.y1 + dy };
+          moving.last = p;
+          redraw();
+        }
+        return;
+      }
+      if (marquee) {
+        marquee.x1 = p[0];
+        marquee.y1 = p[1];
+        selected = itemsInRect(marquee);
+        drawOverlay();
+      }
+    });
+
+    const endPointer = () => {
+      if (drawing) drawing = null;
+      if (erasing) { erasing = null; drawOverlay(); }
+      if (moving) moving = null;
+      if (marquee) {
+        const r = marquee;
+        marquee = null;
+        const hits = itemsInRect(r);
+        const w = Math.abs(r.x1 - r.x0), hh = Math.abs(r.y1 - r.y0);
+        // 太小视为单击空白 → 取消选择
+        if (hits.length && (w > 3 || hh > 3)) {
+          selected = hits;
+          const b = bboxOf(hits);
+          selection = { x0: b.x0 - 4, y0: b.y0 - 4, x1: b.x1 + 4, y1: b.y1 + 4 };
+        } else {
+          selected = [];
+          selection = null;
+        }
+        drawOverlay();
+      }
+    };
+    vp.viewport.addEventListener('pointerup', endPointer);
+    vp.viewport.addEventListener('pointercancel', endPointer);
+
+    // ---- 工具栏 ----
     const colors = ['#1c1b19', '#a4483f', '#4f7a5b', '#b08d57', '#3e5c86'];
     const swatches = el('div', { class: 'row-gap', style: { alignItems: 'center' } });
     colors.forEach((c) => {
-      const b = el('button', { title: c, style: { width: '20px', height: '20px', borderRadius: '50%', background: c, border: c === color ? '2px solid var(--ink)' : '1px solid var(--line)', padding: 0 } });
-      b.onclick = () => { color = c; [...swatches.children].forEach((x) => (x.style.border = '1px solid var(--line)')); b.style.border = '2px solid var(--ink)'; };
+      const b = el('button', {
+        title: c,
+        style: {
+          width: '20px', height: '20px', borderRadius: '50%', background: c,
+          border: c === color ? '2px solid var(--ink)' : '1px solid var(--line)', padding: 0,
+        },
+      });
+      b.onclick = () => {
+        color = c;
+        [...swatches.children].forEach((x) => (x.style.border = '1px solid var(--line)'));
+        b.style.border = '2px solid var(--ink)';
+        // 选中元素时同步改色
+        if (selected.length) {
+          for (const it of selected) it.color = c;
+          redraw();
+        }
+      };
       swatches.append(b);
     });
+
     const sizeSel = el('select', {}, ...[1.5, 2.5, 4, 7].map((s) => el('option', { value: s, text: s + ' px' })));
     sizeSel.value = String(size);
     sizeSel.onchange = () => { size = Number(sizeSel.value); };
 
-    const body = el('div');
+    const toolButtons = [];
+    const toolBtn = (key, label, title) => {
+      const b = el('button', { 'data-tool': key, text: label, title });
+      b.onclick = () => setTool(key);
+      toolButtons.push(b);
+      return b;
+    };
+    const toolGroup = el('div', { class: 'seg', style: { marginRight: '8px' } },
+      toolBtn('pen', '✏️ 画笔', '画笔'),
+      toolBtn('eraser', '🧽 橡皮', '橡皮擦'),
+      toolBtn('select', '⬚ 框选', '框选 / 移动 / 删除'),
+      toolBtn('text', 'T 文字', '添加文字'));
+
+    const body = el('div', { class: 'editor-shell' });
     body.append(
-      el('h2', { text: '手绘' }),
-      el('div', { class: 'row-gap', style: { marginBottom: '10px', alignItems: 'center' } }, swatches, sizeSel,
-        el('button', { text: '撤销', onclick: () => { strokes.pop(); redraw(); } }),
-        el('button', { text: '清空', onclick: () => { strokes = []; redraw(); } })),
-      canvas,
-      el('div', { class: 'modal-foot' },
-        el('button', { text: '取消', onclick: () => close(null) }),
-        el('button', { class: 'primary', text: '插入', onclick: () => close({ id: data ? data.id : uid(), kind: 'draw', strokes, w: W, h: H }) })),
+      el('div', { class: 'editor-shell-head' },
+        el('h2', { text: '手绘' }),
+        el('div', { class: 'editor-shell-tools' },
+          toolGroup, swatches, sizeSel,
+          el('button', { text: '删除选中', onclick: () => deleteSelected() }),
+          el('button', { text: '撤销', onclick: () => { if (items.length) { items.pop(); redraw(); } } }),
+          el('button', {
+            text: '清空',
+            onclick: () => {
+              if (items.length && confirm('清空全部内容？')) {
+                items = [];
+                selected = [];
+                selection = null;
+                redraw();
+              }
+            },
+          }),
+          vp.controls)),
+      el('div', { class: 'editor-shell-body' }, vp.viewport),
+      el('div', { class: 'editor-shell-foot' },
+        hintEl,
+        el('div', { class: 'row-gap' },
+          el('button', { text: '取消', onclick: () => close(null) }),
+          el('button', {
+            class: 'primary', text: '插入',
+            onclick: () => {
+              computeBounds();
+              close({
+                id: data ? data.id : uid(), kind: 'draw', strokes: items,
+                w: Math.ceil(bounds.x1 - bounds.x0), h: Math.ceil(bounds.y1 - bounds.y0),
+                origin: { x: 0, y: 0 },
+              });
+            },
+          }))),
     );
+    setTool('pen');
     redraw();
 
     const modal = document.getElementById('modal');
@@ -291,41 +840,53 @@ const uid = () => 'w' + Date.now().toString(36) + Math.random().toString(36).sli
     const hostModalBody = modal.firstElementChild;
     hostModalBody.innerHTML = '';
     hostModalBody.append(body);
-    modal.classList.add('wide');
+    modal.classList.add('wide', 'editor-modal');
     mask.classList.remove('hidden');
+    // 等两帧确保内容完成布局后，以 100% 比例把画布起点对齐视口左上角
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      vp.view.scale = 1;
+      vp.view.x = 0;
+      vp.view.y = 0;
+      vp.apply();
+      drawOverlay();
+    }));
 
     function close(result) {
+      vp.dispose();
+      clearTimeout(toastTimer);
       mask.classList.add('hidden');
-      modal.classList.remove('wide');
+      modal.classList.remove('wide', 'editor-modal');
       hostModalBody.innerHTML = '';
       document.removeEventListener('keydown', onKey);
       resolve(result);
     }
-    function onKey(e) { if (e.key === 'Escape') close(null); }
+
+    function onKey(e) {
+      if (e.key === 'Escape') {
+        if (selection) { selection = null; selected = []; drawOverlay(); return; }
+        close(null);
+        return;
+      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selected.length && e.target.tagName !== 'INPUT') {
+        e.preventDefault();
+        deleteSelected();
+      }
+    }
     document.addEventListener('keydown', onKey);
     return done;
   }
 
   function renderDraw(data) {
     const scale = 2;
+    const ox = data.origin?.x || 0;
+    const oy = data.origin?.y || 0;
     const canvas = el('canvas', { width: data.w * scale, height: data.h * scale, style: { width: '100%', display: 'block', borderRadius: '4px', border: '1px solid var(--line-soft)', background: '#fff' } });
     const ctx = canvas.getContext('2d');
     ctx.scale(scale, scale);
+    ctx.translate(-ox, -oy);
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    for (const s of data.strokes || []) {
-      if (!s.points.length) continue;
-      ctx.strokeStyle = s.color; ctx.lineWidth = s.size;
-      if (s.points.length === 1) {
-        ctx.fillStyle = s.color;
-        ctx.beginPath();
-        ctx.arc(s.points[0][0], s.points[0][1], s.size / 2, 0, Math.PI * 2);
-        ctx.fill();
-        continue;
-      }
-      ctx.beginPath();
-      s.points.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
-      ctx.stroke();
-    }
+    // 兼容旧数据（无 type 视为笔迹）与新增的文字元素
+    for (const it of data.strokes || []) paintItem(ctx, it.type ? it : { ...it, type: 'stroke' });
     const host = el('div', { class: 'draw-host', 'data-widget': data.id, 'data-kind': 'draw' });
     host.append(canvas);
     return host;

@@ -20,6 +20,43 @@
 .modal h2 { font-size: 16px; margin: 0 0 14px; font-weight: 600; }
 .modal.wide { width: min(1180px, 96vw); }
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+
+/* 编辑器弹窗（手绘 / 思维导图）：固定高度、画布区自适应、底部操作栏常驻可见 */
+.modal.editor-modal { overflow: hidden; height: 86vh; max-height: 900px; padding: 0; display: flex; flex-direction: column; }
+.modal.editor-modal > * { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.editor-shell { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.editor-shell-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 14px 22px 12px; border-bottom: 1px solid var(--line-soft); flex-shrink: 0;
+}
+.editor-shell-head h2 { font-size: 16px; margin: 0; font-weight: 600; }
+.editor-shell-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.editor-shell-body { flex: 1; min-height: 0; position: relative; overflow: hidden; background: #f4f1eb; }
+.editor-shell-foot {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding: 10px 22px; border-top: 1px solid var(--line-soft); background: var(--bg); flex-shrink: 0;
+}
+.editor-shell-foot .hint { margin: 0; }
+
+/* 无限画布：绝对定位铺满容器，缩放/平移由内部处理 */
+.canvas-viewport {
+  position: absolute; inset: 0; overflow: hidden; cursor: grab; touch-action: none;
+  background-color: #fff;
+  background-image: radial-gradient(circle, #e6e1d8 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+.canvas-viewport.panning { cursor: grabbing; }
+.canvas-viewport.is-draw { cursor: crosshair; }
+.canvas-viewport.is-draw.panning { cursor: grabbing; }
+.canvas-viewport canvas { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+.zoom-badge {
+  position: absolute; right: 12px; bottom: 10px; z-index: 2;
+  background: rgba(28,27,25,.72); color: #fff; font-size: 11px; padding: 2px 8px; border-radius: 10px;
+  pointer-events: none; font-variant-numeric: tabular-nums;
+}
+/* 内容层：不加 padding，坐标原点即内容原点，便于精确的屏幕↔内容坐标换算 */
+/* inline-block 让内容层包裹子元素并获得真实尺寸；不设绝对定位，避免塌陷为 0×0 */
+.mm-viewport-inner { position: absolute; top: 0; left: 0; transform-origin: 0 0; width: fit-content; height: fit-content; }
 textarea.code { font-family: var(--mono); font-size: 12.5px; min-height: 120px; resize: vertical; background: #f8f6f2; }
 
 .toast {

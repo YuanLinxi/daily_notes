@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 
 const FORMAT = 'daily-notes';
-const VERSION = 1;
+const VERSION = 2;
 
 const noteCols = ['date', 'project', 'title', 'content', 'content_html', 'done', 'status',
   'due_date', 'root_id', 'start_time', 'finish_time', 'remark', 'content_json',
@@ -35,16 +35,36 @@ function toSnippetDto(r) {
   };
 }
 
+function readAll(db) {
+  const objects = db.prepare('SELECT * FROM objects ORDER BY id').all();
+  const byObject = new Map();
+  for (const v of db.prepare('SELECT * FROM prop_values').all()) {
+    if (!byObject.has(v.object_id)) byObject.set(v.object_id, {});
+    byObject.get(v.object_id)[v.relation_key] = v.value;
+  }
+  return objects.map((o) => ({ ...o, v: byObject.get(o.id) || {} }));
+}
+
 function createPackage(db) {
-  const notes = db.prepare('SELECT * FROM daily_notes ORDER BY id').all();
-  const snippets = db.prepare('SELECT * FROM snippets ORDER BY id').all();
+  const all = readAll(db);
+  const notes = all.filter((o) => o.type_key === 'note');
+  const snippets = all.filter((o) => o.type_key === 'snippet');
   return {
     format: FORMAT,
     version: VERSION,
     exportedAt: new Date().toISOString(),
     stats: { notes: notes.length, snippets: snippets.length },
-    notes: notes.map(toNoteDto),
-    snippets: snippets.map(toSnippetDto),
+    notes: notes.map((o) => toNoteDto({
+      date: o.v.date || '', project: o.v.project || '', title: o.title || '', content: o.v.content || '',
+      content_html: o.v.content_html || '', done: (o.v.status || '') === 'done' ? 1 : 0,
+      start_time: o.v.start_time || '', finish_time: o.v.finish_time || '', remark: o.v.remark || '',
+      content_json: o.v.content_json || '', created_at: o.created_at, updated_at: o.updated_at,
+    })),
+    snippets: snippets.map((o) => toSnippetDto({
+      language: o.v.language || '', title: o.title || '', command: o.v.command || '',
+      remark: o.v.remark || '', tags: o.v.tags || '', uses: Number(o.v.uses) || 0,
+      created_at: o.created_at, updated_at: o.updated_at,
+    })),
   };
 }
 
@@ -68,15 +88,19 @@ function readPackage(file) {
 
 // 合并导入：按内容指纹去重，已存在则跳过，不改动本机已有记录
 function importJson(db, data) {
-  const existingNotes = new Set(db.prepare('SELECT * FROM daily_notes').all().map(noteSig));
-  const existingSnippets = new Set(db.prepare('SELECT * FROM snippets').all().map(snippetSig));
+  const all = readAll(db);
+  const existingNotes = new Set(all.filter((o) => o.type_key === 'note').map((o) => noteSig({
+    date: o.v.date || '', project: o.v.project || '', title: o.title || '', content: o.v.content || '',
+    start_time: o.v.start_time || '', finish_time: o.v.finish_time || '', remark: o.v.remark || '',
+  })));
+  const existingSnippets = new Set(all.filter((o) => o.type_key === 'snippet').map((o) => snippetSig({
+    title: o.title || '', command: o.v.command || '',
+  })));
 
-  const insNote = db.prepare(`INSERT INTO daily_notes
-    (date, project, title, content, content_html, done, start_time, finish_time, remark, content_json, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-  const insSnip = db.prepare(`INSERT INTO snippets
-    (language, title, command, remark, tags, uses, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+  const insObj = db.prepare('INSERT INTO objects (type_key, title, created_at, updated_at) VALUES (?, ?, ?, ?)');
+  const insVal = db.prepare('INSERT OR REPLACE INTO prop_values (object_id, relation_key, value) VALUES (?, ?, ?)');
+  const put = (id, k, v) => { if (v !== '' && v !== null && v !== undefined) insVal.run(id, k, String(v)); };
+  const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
 
   let notesAdded = 0, notesSkipped = 0, snippetsAdded = 0, snippetsSkipped = 0;
   db.exec('BEGIN');
@@ -86,25 +110,39 @@ function importJson(db, data) {
         date: n.date || '', project: n.project || '', title: n.title || '', content: n.content || '',
         content_html: n.contentHtml || '', done: n.done ? 1 : 0, start_time: n.startTime || '',
         finish_time: n.finishTime || '', remark: n.remark || '', content_json: n.contentJson || '',
-        created_at: n.createdAt || '', updated_at: n.updatedAt || '',
       };
       const sig = noteSig(row);
       if (existingNotes.has(sig)) { notesSkipped++; continue; }
-      insNote.run(row.date, row.project, row.title, row.content, row.content_html, row.done,
-        row.start_time, row.finish_time, row.remark, row.content_json, row.created_at, row.updated_at);
+      const res = insObj.run('note', row.title, n.createdAt || now, n.updatedAt || now);
+      const id = Number(res.lastInsertRowid);
+      put(id, 'date', row.date);
+      put(id, 'project', row.project);
+      put(id, 'content', row.content);
+      put(id, 'content_html', row.content_html);
+      put(id, 'content_json', row.content_json);
+      put(id, 'status', n.status || (n.done ? 'done' : 'todo'));
+      put(id, 'due_date', n.dueDate || '');
+      put(id, 'start_time', row.start_time);
+      put(id, 'finish_time', row.finish_time);
+      put(id, 'remark', row.remark);
+      put(id, 'root_id', n.rootId || id);
       existingNotes.add(sig);
       notesAdded++;
     }
-    const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
     for (const s of data.snippets) {
       const row = {
         language: s.language || '', title: s.title || '', command: s.command || '',
         remark: s.remark || '', tags: s.tags || '', uses: Number(s.uses) || 0,
-        created_at: s.createdAt || now, updated_at: s.updatedAt || now,
       };
       const sig = snippetSig(row);
       if (existingSnippets.has(sig)) { snippetsSkipped++; continue; }
-      insSnip.run(row.language, row.title, row.command, row.remark, row.tags, row.uses, row.created_at, row.updated_at);
+      const res = insObj.run('snippet', row.title, s.createdAt || now, s.updatedAt || now);
+      const id = Number(res.lastInsertRowid);
+      put(id, 'language', row.language);
+      put(id, 'command', row.command);
+      put(id, 'remark', row.remark);
+      put(id, 'tags', row.tags);
+      put(id, 'uses', row.uses);
       existingSnippets.add(sig);
       snippetsAdded++;
     }
@@ -126,16 +164,29 @@ function exportSnapshot(db, dbPath, file) {
   return { file, size: fs.statSync(file).size };
 }
 
+// 读取快照：兼容新的对象模型（objects 表）与旧的扁平表
 function inspectSnapshot(file) {
   const snap = new DatabaseSync(file, { readOnly: true });
   try {
     const tables = new Set(snap.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name));
-    if (!tables.has('daily_notes') || !tables.has('snippets')) {
-      throw new Error('不是 Daily Notes 的数据库文件');
+    if (tables.has('objects')) {
+      const objects = snap.prepare('SELECT * FROM objects ORDER BY id').all();
+      const values = snap.prepare('SELECT * FROM prop_values').all();
+      const byObject = new Map();
+      for (const v of values) {
+        if (!byObject.has(v.object_id)) byObject.set(v.object_id, {});
+        byObject.get(v.object_id)[v.relation_key] = v.value;
+      }
+      return { model: 'object', objects, byObject };
     }
-    const notes = snap.prepare('SELECT * FROM daily_notes ORDER BY id').all();
-    const snippets = snap.prepare('SELECT * FROM snippets ORDER BY id').all();
-    return { notes, snippets };
+    if (tables.has('daily_notes') && tables.has('snippets')) {
+      return {
+        model: 'legacy',
+        notes: snap.prepare('SELECT * FROM daily_notes ORDER BY id').all(),
+        snippets: snap.prepare('SELECT * FROM snippets ORDER BY id').all(),
+      };
+    }
+    throw new Error('不是 Daily Notes 的数据库文件');
   } finally {
     snap.close();
   }
@@ -150,19 +201,55 @@ function restoreSnapshot(targetDb, dbPath, file) {
 
   targetDb.exec('BEGIN');
   try {
-    targetDb.exec('DELETE FROM daily_notes; DELETE FROM snippets;');
-    const insNote = targetDb.prepare(`INSERT INTO daily_notes
-      (${noteCols.join(', ')}) VALUES (${noteCols.map(() => '?').join(', ')})`);
-    for (const n of info.notes) insNote.run(...noteCols.map((c) => n[c]));
-    const insSnip = targetDb.prepare(`INSERT INTO snippets
-      (${snippetCols.join(', ')}) VALUES (${snippetCols.map(() => '?').join(', ')})`);
-    for (const s of info.snippets) insSnip.run(...snippetCols.map((c) => s[c]));
+    targetDb.exec('DELETE FROM prop_values; DELETE FROM objects;');
+    const insObj = targetDb.prepare(`INSERT INTO objects (id, type_key, title, created_at, updated_at, deleted_at)
+      VALUES (?, ?, ?, ?, ?, ?)`);
+    const insVal = targetDb.prepare('INSERT OR REPLACE INTO prop_values (object_id, relation_key, value) VALUES (?, ?, ?)');
+
+    if (info.model === 'object') {
+      for (const o of info.objects) {
+        insObj.run(o.id, o.type_key, o.title, o.created_at, o.updated_at, o.deleted_at || '');
+        for (const [k, v] of Object.entries(info.byObject.get(o.id) || {})) {
+          if (v !== '' && v !== null && v !== undefined) insVal.run(o.id, k, String(v));
+        }
+      }
+    } else {
+      // 旧格式快照：先按旧结构插入临时表再走迁移不可行，这里直接转换写入
+      for (const n of info.notes) {
+        insObj.run(n.id, 'note', n.title || '', n.created_at || '', n.updated_at || '', n.deleted_at || '');
+        const pairs = {
+          date: n.date, project: n.project, content: n.content, content_html: n.content_html,
+          content_json: n.content_json, status: n.status || (n.done ? 'done' : 'todo'),
+          due_date: n.due_date, start_time: n.start_time, finish_time: n.finish_time,
+          remark: n.remark, root_id: n.root_id || n.id,
+        };
+        for (const [k, v] of Object.entries(pairs)) {
+          if (v !== '' && v !== null && v !== undefined && v !== 0) insVal.run(n.id, k, String(v));
+        }
+      }
+      for (const s of info.snippets) {
+        const row = insObj.run(s.id, 'snippet', s.title || '', s.created_at || '', s.updated_at || '', '');
+        const id = Number(row.lastInsertRowid) || s.id;
+        const pairs = { language: s.language, command: s.command, remark: s.remark, tags: s.tags, uses: s.uses };
+        for (const [k, v] of Object.entries(pairs)) {
+          if (v !== '' && v !== null && v !== undefined) insVal.run(id, k, String(v));
+        }
+      }
+    }
     targetDb.exec('COMMIT');
   } catch (e) {
     targetDb.exec('ROLLBACK');
     throw e;
   }
-  return { notes: info.notes.length, snippets: info.snippets.length, backup };
+  const counts = readCounts(targetDb);
+  return { ...counts, backup };
+}
+
+function readCounts(db) {
+  return {
+    notes: db.prepare("SELECT COUNT(*) c FROM objects WHERE type_key='note'").get().c,
+    snippets: db.prepare("SELECT COUNT(*) c FROM objects WHERE type_key='snippet'").get().c,
+  };
 }
 
 module.exports = {

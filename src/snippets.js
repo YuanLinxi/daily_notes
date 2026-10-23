@@ -1,50 +1,66 @@
-// 代码命令记录
-const { getDb } = require('./connection');
-const { isoNow, mapSnippet } = require('./util');
+// 代码命令记录：基于对象模型
+const obj = require('./objects');
+const { isoNow } = require('./util');
+
+function toSnippet(o) {
+  const v = o.values || {};
+  return {
+    id: o.id,
+    language: v.language || '',
+    title: o.title || '',
+    command: v.command || '',
+    remark: v.remark || '',
+    tags: v.tags || '',
+    uses: Number(v.uses) || 0,
+    createdAt: o.created_at,
+    updatedAt: o.updated_at,
+  };
+}
+
+const SNIPPET_KEYS = ['language', 'command', 'remark', 'tags', 'uses'];
 
 function listSnippets(f = {}) {
-  const where = [];
-  const args = {};
-  if (f.q) {
-    where.push('(title LIKE :q OR command LIKE :q OR remark LIKE :q OR tags LIKE :q OR language LIKE :q)');
-    args.q = `%${f.q}%`;
-  }
-  if (f.language) { where.push('language = :language'); args.language = f.language; }
-  const sql = `SELECT * FROM snippets ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-    ORDER BY uses DESC, updated_at DESC`;
-  return getDb().prepare(sql).all(args).map(mapSnippet);
+  const q = (f.q || '').trim().toLowerCase();
+  return obj.listWithValues('snippet')
+    .filter((o) => {
+      const v = o.values;
+      if (f.language && (v.language || '') !== f.language) return false;
+      if (!q) return true;
+      return obj.likeMatch({ ...v, title: o.title }, ['title', 'command', 'remark', 'tags', 'language'], q);
+    })
+    .map(toSnippet)
+    .sort((a, b) => (b.uses - a.uses) || b.updatedAt.localeCompare(a.updatedAt));
 }
 
 function saveSnippet(s) {
-  const db = getDb();
   const now = isoNow();
   const values = {
     language: s.language || '',
-    title: s.title || '',
     command: s.command || '',
     remark: s.remark || '',
     tags: s.tags || '',
   };
   if (s.id) {
-    db.prepare(`UPDATE snippets SET language=:language, title=:title, command=:command,
-      remark=:remark, tags=:tags, updated_at=:updated_at WHERE id=:id`)
-      .run({ ...values, updated_at: now, id: s.id });
-    return mapSnippet(db.prepare('SELECT * FROM snippets WHERE id = ?').get(s.id));
+    obj.updateObject(s.id, { title: s.title || '', updatedAt: now });
+    for (const k of SNIPPET_KEYS) obj.setValue(s.id, k, values[k] || '');
+    return toSnippet({ ...obj.getObject(s.id), values: obj.getValues(s.id) });
   }
-  const res = db.prepare(`INSERT INTO snippets (language, title, command, remark, tags, created_at, updated_at)
-    VALUES (:language, :title, :command, :remark, :tags, :created_at, :updated_at)`)
-    .run({ ...values, created_at: now, updated_at: now });
-  return mapSnippet(db.prepare('SELECT * FROM snippets WHERE id = ?').get(Number(res.lastInsertRowid)));
+  const id = obj.createObject({ typeKey: 'snippet', title: s.title || '', createdAt: now, updatedAt: now });
+  for (const k of SNIPPET_KEYS) if (values[k]) obj.setValue(id, k, values[k]);
+  obj.setValue(id, 'uses', '0');
+  return toSnippet({ ...obj.getObject(id), values: obj.getValues(id) });
 }
 
 function deleteSnippet(id) {
-  getDb().prepare('DELETE FROM snippets WHERE id = ?').run(id);
-  return true;
+  return obj.deleteObjectPermanently(id);
 }
 
 function useSnippet(id) {
-  getDb().prepare('UPDATE snippets SET uses = uses + 1 WHERE id = ?').run(id);
+  const o = obj.getObject(id);
+  if (!o) return true;
+  const cur = Number(obj.getValues(id).uses) || 0;
+  obj.setValue(id, 'uses', String(cur + 1));
   return true;
 }
 
-module.exports = { listSnippets, saveSnippet, deleteSnippet, useSnippet };
+module.exports = { listSnippets, saveSnippet, deleteSnippet, useSnippet, toSnippet };

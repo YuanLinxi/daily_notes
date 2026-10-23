@@ -1,14 +1,28 @@
 // 通用导出：Markdown 与 HTML（可打印为 PDF）
-const { getDb } = require('./connection');
+const obj = require('./objects');
 const { isoNow } = require('./util');
 
 function exportMarkdown({ dateFrom = '', dateTo = '', project = '' } = {}) {
-  const where = ["deleted_at = ''"];
-  const args = [];
-  if (dateFrom) { where.push('date >= ?'); args.push(dateFrom); }
-  if (dateTo) { where.push('date <= ?'); args.push(dateTo); }
-  if (project) { where.push('project = ?'); args.push(project); }
-  const notes = getDb().prepare(`SELECT * FROM daily_notes WHERE ${where.join(' AND ')} ORDER BY date ASC, id ASC`).all(...args);
+  const notes = obj.listWithValues('note')
+    .map((o) => ({
+      id: o.id,
+      date: o.values.date || '',
+      project: o.values.project || '',
+      title: o.title || '',
+      content: o.values.content || '',
+      status: o.values.status || 'todo',
+      due_date: o.values.due_date || '',
+      start_time: o.values.start_time || '',
+      finish_time: o.values.finish_time || '',
+      remark: o.values.remark || '',
+    }))
+    .filter((n) => {
+      if (dateFrom && n.date < dateFrom) return false;
+      if (dateTo && n.date > dateTo) return false;
+      if (project && n.project !== project) return false;
+      return true;
+    })
+    .sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
 
   const md = [];
   md.push('# Daily Notes 导出');

@@ -1,16 +1,36 @@
-// 统一搜索：记录与命令一起查
-const { getDb } = require('./connection');
+// 统一搜索：记录与命令一起查（基于对象模型）
+const obj = require('./objects');
 
 function searchAll(q, limit = 60) {
-  const db = getDb();
   if (!q || !q.trim()) return { notes: [], snippets: [] };
-  const like = `%${q.trim()}%`;
-  const notes = db.prepare(`SELECT id, date, project, title, content, status FROM daily_notes
-    WHERE deleted_at = '' AND (title LIKE ? OR content LIKE ? OR remark LIKE ? OR project LIKE ?)
-    ORDER BY date DESC, id DESC LIMIT ?`).all(like, like, like, like, limit);
-  const snippets = db.prepare(`SELECT id, title, command, language, tags FROM snippets
-    WHERE title LIKE ? OR command LIKE ? OR remark LIKE ? OR tags LIKE ? OR language LIKE ?
-    ORDER BY uses DESC LIMIT ?`).all(like, like, like, like, like, limit);
+  const needle = q.trim().toLowerCase();
+
+  const notes = obj.listWithValues('note')
+    .filter((o) => obj.likeMatch({ ...o.values, title: o.title }, ['title', 'content', 'remark', 'project'], needle))
+    .map((o) => ({
+      id: o.id,
+      date: o.values.date || '',
+      project: o.values.project || '',
+      title: o.title || '',
+      content: o.values.content || '',
+      status: o.values.status || 'todo',
+    }))
+    .sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id)
+    .slice(0, limit);
+
+  const snippets = obj.listWithValues('snippet')
+    .filter((o) => obj.likeMatch({ ...o.values, title: o.title }, ['title', 'command', 'remark', 'tags', 'language'], needle))
+    .map((o) => ({
+      id: o.id,
+      title: o.title || '',
+      command: o.values.command || '',
+      language: o.values.language || '',
+      tags: o.values.tags || '',
+      uses: Number(o.values.uses) || 0,
+    }))
+    .sort((a, b) => b.uses - a.uses)
+    .slice(0, limit);
+
   return { notes, snippets };
 }
 

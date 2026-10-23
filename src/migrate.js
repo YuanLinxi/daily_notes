@@ -1,59 +1,84 @@
-// 建表、补齐字段、内置模板种子、数据一致性修复
+// 建表与迁移：对象 + 属性模型
+// 核心表：objects（内容）/ relations（属性定义）/ values（属性值）
+// 旧表 daily_notes / snippets / projects 会在首次运行时一次性迁移并删除
+
+// 内置属性定义（幂等：按 key 存在即跳过）
+const BUILTIN_RELATIONS = [
+  // key, name, type, format, options
+  ['date', '日期', 'date', '', null],
+  ['project', '项目', 'text', '', null],
+  ['content', '正文', 'longtext', '', null],
+  ['content_html', '正文 HTML', 'longtext', '', null],
+  ['content_json', '富媒体数据', 'longtext', '', null],
+  ['status', '状态', 'select', '', ['todo', 'doing', 'blocked', 'done']],
+  ['due_date', '截止日期', 'date', '', null],
+  ['start_time', '开始时间', 'datetime', 'time', null],
+  ['finish_time', '完成时间', 'datetime', 'time', null],
+  ['remark', '备注', 'text', '', null],
+  ['root_id', '任务根', 'number', '', null],
+  ['language', '语言', 'text', '', null],
+  ['command', '命令', 'longtext', '', null],
+  ['tags', '标签', 'multiselect', '', null],
+  ['uses', '使用次数', 'number', '', null],
+  ['goal', '项目目标', 'longtext', '', null],
+];
+
 function run(db) {
   db.exec(`
-    CREATE TABLE IF NOT EXISTS daily_notes (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      date          TEXT NOT NULL,
-      project       TEXT NOT NULL DEFAULT '',
-      title         TEXT NOT NULL DEFAULT '',
-      content       TEXT NOT NULL DEFAULT '',
-      content_html  TEXT NOT NULL DEFAULT '',
-      done          INTEGER NOT NULL DEFAULT 0,
-      start_time    TEXT NOT NULL DEFAULT '',
-      finish_time   TEXT NOT NULL DEFAULT '',
-      remark        TEXT NOT NULL DEFAULT '',
-      content_json  TEXT NOT NULL DEFAULT '',
-      created_at    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-      updated_at    TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-    );
-
-    CREATE TABLE IF NOT EXISTS snippets (
+    CREATE TABLE IF NOT EXISTS objects (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      language    TEXT NOT NULL DEFAULT '',
+      type_key    TEXT NOT NULL,
       title       TEXT NOT NULL DEFAULT '',
-      command     TEXT NOT NULL DEFAULT '',
-      remark      TEXT NOT NULL DEFAULT '',
-      tags        TEXT NOT NULL DEFAULT '',
-      uses        INTEGER NOT NULL DEFAULT 0,
       created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-      updated_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+      deleted_at  TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_objects_type ON objects(type_key);
+    CREATE INDEX IF NOT EXISTS idx_objects_deleted ON objects(deleted_at);
+
+    CREATE TABLE IF NOT EXISTS relations (
+      key         TEXT PRIMARY KEY,
+      name        TEXT NOT NULL,
+      type        TEXT NOT NULL DEFAULT 'text',
+      format      TEXT NOT NULL DEFAULT '',
+      options     TEXT NOT NULL DEFAULT '[]',
+      builtin     INTEGER NOT NULL DEFAULT 1,
+      sort_order  INTEGER NOT NULL DEFAULT 0
     );
 
-    CREATE INDEX IF NOT EXISTS idx_notes_date ON daily_notes(date);
-    CREATE INDEX IF NOT EXISTS idx_notes_project ON daily_notes(project);
-    CREATE INDEX IF NOT EXISTS idx_snip_tags ON snippets(tags);
+    CREATE TABLE IF NOT EXISTS prop_values (
+      object_id     INTEGER NOT NULL,
+      relation_key  TEXT NOT NULL,
+      value         TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (object_id, relation_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_values_key ON prop_values(relation_key);
   `);
 
-  // 兼容旧库：补齐后续新增字段
-  const cols = db.prepare('PRAGMA table_info(daily_notes)').all().map((c) => c.name);
-  const add = (name, ddl) => { if (!cols.includes(name)) db.exec(`ALTER TABLE daily_notes ADD COLUMN ${ddl}`); };
-  add('finish_time', "finish_time TEXT NOT NULL DEFAULT ''");
-  add('title', "title TEXT NOT NULL DEFAULT ''");
-  add('start_time', "start_time TEXT NOT NULL DEFAULT ''");
-  add('remark', "remark TEXT NOT NULL DEFAULT ''");
-  add('content_html', "content_html TEXT NOT NULL DEFAULT ''");
-  add('content_json', "content_json TEXT NOT NULL DEFAULT ''");
-  add('deleted_at', "deleted_at TEXT NOT NULL DEFAULT ''");
-  add('status', "status TEXT NOT NULL DEFAULT ''");
-  add('due_date', "due_date TEXT NOT NULL DEFAULT ''");
-  add('root_id', "root_id INTEGER NOT NULL DEFAULT 0");
+  seedRelations(db);
+  ensureAuxTables(db);
 
-  // 数据一致性修复：孤儿记录自关联为任务根；done 与 status 同步
-  db.exec('UPDATE daily_notes SET root_id = id WHERE root_id = 0 OR root_id IS NULL');
-  db.exec("UPDATE daily_notes SET status = 'done' WHERE done = 1 AND status <> 'done'");
-  db.exec("UPDATE daily_notes SET status = 'todo' WHERE (status = '' OR status IS NULL) AND done = 0");
-  db.exec("UPDATE daily_notes SET done = 1 WHERE status = 'done' AND done = 0");
+  if (tableExists(db, 'daily_notes')) migrateLegacy(db);
+  if (tableExists(db, 'snippets')) migrateLegacy(db, true);
 
+  seedBuiltinTemplates(db);
+}
+
+function tableExists(db, name) {
+  return !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name);
+}
+
+function seedRelations(db) {
+  const ins = db.prepare(`INSERT INTO relations (key, name, type, format, options, builtin, sort_order)
+    SELECT ?, ?, ?, ?, ?, 1, ?
+    WHERE NOT EXISTS (SELECT 1 FROM relations WHERE key = ?)`);
+  BUILTIN_RELATIONS.forEach(([key, name, type, format, options], i) => {
+    ins.run(key, name, type, format, JSON.stringify(options || []), i, key);
+  });
+}
+
+// 辅助表：结构保持与旧版一致
+function ensureAuxTables(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS note_versions (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,14 +108,75 @@ function run(db) {
       query    TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
     );
-    CREATE TABLE IF NOT EXISTS projects (
-      name     TEXT PRIMARY KEY,
-      goal     TEXT NOT NULL DEFAULT ''
-    );
-    CREATE INDEX IF NOT EXISTS idx_notes_root ON daily_notes(root_id);
   `);
+}
 
-  seedBuiltinTemplates(db);
+// 一次性迁移：旧扁平表 → objects + values，完成后删除旧表
+function migrateLegacy(db, force = false) {
+  const hasNotes = tableExists(db, 'daily_notes');
+  if (!force && !hasNotes) return;
+
+  const insObj = db.prepare(`INSERT INTO objects (id, type_key, title, created_at, updated_at, deleted_at)
+    VALUES (?, ?, ?, ?, ?, ?)`);
+  const insVal = db.prepare('INSERT OR REPLACE INTO prop_values (object_id, relation_key, value) VALUES (?, ?, ?)');
+
+  const put = (id, key, val) => {
+    if (val === null || val === undefined) return;
+    if (val === '') return;
+    insVal.run(id, key, String(val));
+  };
+
+  db.exec('BEGIN');
+  try {
+    if (db.prepare("SELECT COUNT(*) c FROM objects").get().c === 0 && hasNotes) {
+      // --- 记录 ---
+      for (const r of db.prepare('SELECT * FROM daily_notes').all()) {
+        insObj.run(r.id, 'note', r.title || '', r.created_at || '', r.updated_at || '', r.deleted_at || '');
+        put(r.id, 'date', r.date);
+        put(r.id, 'project', r.project);
+        put(r.id, 'content', r.content);
+        put(r.id, 'content_html', r.content_html);
+        put(r.id, 'content_json', r.content_json);
+        put(r.id, 'status', r.status || (r.done ? 'done' : 'todo'));
+        put(r.id, 'due_date', r.due_date);
+        put(r.id, 'start_time', r.start_time);
+        put(r.id, 'finish_time', r.finish_time);
+        put(r.id, 'remark', r.remark);
+        put(r.id, 'root_id', r.root_id || r.id);
+      }
+    }
+
+    if (tableExists(db, 'snippets')) {
+      for (const r of db.prepare('SELECT * FROM snippets').all()) {
+        // 命令与记录共用 objects 的自增空间，因此不复用旧 id（前端不依赖 id 的具体值）
+        const row = db.prepare(`INSERT INTO objects (type_key, title, created_at, updated_at, deleted_at)
+          VALUES ('snippet', ?, ?, ?, '')`).run(r.title || '', r.created_at || '', r.updated_at || '');
+        const id = Number(row.lastInsertRowid);
+        put(id, 'language', r.language);
+        put(id, 'command', r.command);
+        put(id, 'remark', r.remark);
+        put(id, 'tags', r.tags);
+        put(id, 'uses', r.uses || 0);
+      }
+    }
+
+    if (tableExists(db, 'projects')) {
+      for (const r of db.prepare('SELECT * FROM projects').all()) {
+        const row = insObj.run(null, 'project', r.name, '', '', '');
+        put(Number(row.lastInsertRowid), 'goal', r.goal);
+      }
+    }
+
+    db.exec('DROP TABLE IF EXISTS daily_notes');
+    db.exec('DROP TABLE IF EXISTS snippets');
+    db.exec('DROP TABLE IF EXISTS projects');
+    db.exec('COMMIT');
+    console.log('[migrate] 旧表已迁移至对象模型并删除');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    console.error('[migrate] 迁移失败，已回滚:', e.message);
+    throw e;
+  }
 }
 
 // 内置模板（幂等：按名称存在即跳过）
@@ -104,4 +190,4 @@ function seedBuiltinTemplates(db) {
   for (const [name, content] of builtins) ins.run(name, content, name);
 }
 
-module.exports = { run, seedBuiltinTemplates };
+module.exports = { run, seedBuiltinTemplates, migrateLegacy, BUILTIN_RELATIONS };

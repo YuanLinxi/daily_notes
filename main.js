@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, dialog, shell, globalShortcut } = require('electron');
 const path = require('path');
+const { DatabaseSync } = require('node:sqlite');
 const fs = require('fs');
 
 const db = require('./src/db');
@@ -112,6 +113,7 @@ if (!singleInstance) {
   app.on('second-instance', () => showWindow());
 
   app.whenReady().then(() => {
+    backupBeforeMigration();
     db.init(config.dbPath);
     registerIpc();
     createWindow();
@@ -127,6 +129,27 @@ if (!singleInstance) {
 
 // ---------- 自动备份：每天有变更时备份一次，保留最近 30 份 ----------
 const BACKUP_KEEP = 30;
+
+// 对象模型迁移前，为旧结构数据库留一份完整副本，便于回退
+function backupBeforeMigration() {
+  try {
+    if (!fs.existsSync(config.dbPath)) return;
+    const probe = new DatabaseSync(config.dbPath, { readOnly: true });
+    const hasLegacy = !!probe.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='daily_notes'").get();
+    probe.close();
+    if (!hasLegacy) return;
+    const dir = backupDir();
+    fs.mkdirSync(dir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+    const file = path.join(dir, `pre-migration-${stamp}.db`);
+    const src = new DatabaseSync(config.dbPath, { readOnly: true });
+    src.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
+    src.close();
+    console.log('[migrate] 迁移前备份：', file);
+  } catch (e) {
+    console.warn('[migrate] 迁移前备份失败（继续尝试迁移）：', e.message);
+  }
+}
 
 function backupDir() {
   return path.join(path.dirname(config.dbPath), 'backups');

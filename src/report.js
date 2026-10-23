@@ -1,8 +1,8 @@
-// 周报：按项目汇总本周成果与未完成事项
-const { getDb } = require('./connection');
-const { mapNote, summarizeLine, today } = require('./util');
+// 周报：按项目汇总本周成果与未完成事项（基于对象模型）
+const obj = require('./objects');
+const { summarizeLine, today } = require('./util');
 
-// 汇总某一周（默认本周一~周日）各项目的成果、未完成与下周计划（未完成的顺延）
+// 汇总某一周（默认本周一~周日）各项目的成果、未完成与下周计划
 function weeklyReport(weekStart) {
   const start = weekStart || (() => {
     const d = new Date();
@@ -15,8 +15,21 @@ function weeklyReport(weekStart) {
     d.setDate(d.getDate() + 6);
     return today(d);
   })();
-  const notes = getDb().prepare(`SELECT * FROM daily_notes
-    WHERE deleted_at='' AND date>=? AND date<=? ORDER BY date ASC, id ASC`).all(start, endDate).map(mapNote);
+
+  const notes = obj.listWithValues('note')
+    .map((o) => ({
+      id: o.id,
+      title: o.title || '',
+      date: o.values.date || '',
+      project: o.values.project || '',
+      content: o.values.content || '',
+      status: o.values.status || 'todo',
+      dueDate: o.values.due_date || '',
+      remark: o.values.remark || '',
+      rootId: Number(o.values.root_id) || o.id,
+    }))
+    .filter((n) => n.date >= start && n.date <= endDate)
+    .sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
 
   const byProject = new Map();
   for (const n of notes) {
@@ -26,6 +39,7 @@ function weeklyReport(weekStart) {
     if (n.status === 'done') g.done.push(n);
     else if (['todo', 'doing', 'blocked'].includes(n.status)) g.open.push(n);
   }
+
   return {
     start, endDate,
     projects: [...byProject.entries()].map(([name, g]) => ({

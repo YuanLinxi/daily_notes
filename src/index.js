@@ -12,6 +12,7 @@ const filters = require('./filters');
 const projects = require('./projects');
 const report = require('./report');
 const exporter = require('./export');
+const objects = require('./objects');
 const { snippetAround } = require('./util');
 
 module.exports = {
@@ -80,4 +81,11 @@ module.exports = {
   // 导出
   exportMarkdown: exporter.exportMarkdown,
   exportHtml: exporter.exportHtml,
+
+  // 对象模型（属性定义，供后续多视图/高级筛选用）
+  listRelations: objects.listRelations,
+  getRelation: objects.getRelation,
+  saveRelation: objects.saveRelation,
+  getValues: objects.getValues,
+  setValue: objects.setValue,
 };

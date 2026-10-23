@@ -44,7 +44,3 @@ export function debounce(fn, ms = 220) {
     t = setTimeout(() => fn(...a), ms);
   };
 }
-
-export function promptText(label, defaultValue = '') {
-  return prompt(label, defaultValue);
-}

@@ -4,6 +4,7 @@ import { state } from '../core/state.js';
 import { notes as notesApi, meta as metaApi, filters as filtersApi } from '../core/api.js';
 import { todayStr, pad, summarize, statusTag, STATUS, STATUS_SEQ } from '../core/format.js';
 import { showModal, closeModal } from '../ui/modal.js';
+import { askText } from '../core/prompt.js';
 import { refreshViews } from '../core/registry.js';
 import { loadDaily, startNewNote } from './daily.js';
 import { loadProjects } from './projects.js';
@@ -153,7 +154,7 @@ function renderTable(list) {
       h('button', {
         text: '改项目',
         onclick: async () => {
-          const p = prompt('目标项目名称：');
+          const p = await askText({ title: '目标项目名称', placeholder: '项目名称' });
           if (p === null) return;
           batchUpdate(checked, { project: p.trim() });
         },
@@ -161,7 +162,7 @@ function renderTable(list) {
       h('button', {
         text: '改截止日期',
         onclick: async () => {
-          const d = prompt('截止日期（YYYY-MM-DD，留空清除）：');
+          const d = await askText({ title: '截止日期（YYYY-MM-DD，留空清除）', placeholder: '2026-01-01' });
           if (d === null) return;
           batchUpdate(checked, { dueDate: d.trim() });
         },
@@ -505,9 +506,9 @@ export function initDatabaseView() {
       f.status && ({ open: '未完成', todo: '待办', doing: '进行中', blocked: '受阻', done: '已完成' }[f.status]),
       (f.dateFrom || f.dateTo) && `${f.dateFrom || '…'} ~ ${f.dateTo || '…'}`,
     ].filter(Boolean).join(' + ') || '全部记录';
-    const name = prompt('筛选名称：', desc);
-    if (!name) return;
-    await filtersApi.save({ name, query: JSON.stringify(f) });
+    const name = await askText({ title: '筛选名称', placeholder: '为此筛选起个名字', initial: desc });
+    if (!name || !name.trim()) return;
+    await filtersApi.save({ name: name.trim(), query: JSON.stringify(f) });
     toast('筛选已保存');
     loadSavedFilters();
   });

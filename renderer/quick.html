@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>快速记录</title>
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    body { background: var(--bg); overflow: hidden; }
+    .quick { display: flex; flex-direction: column; height: 100vh; padding: 14px 16px; }
+    .quick-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .quick-head h2 { font-size: 14px; margin: 0; }
+    .quick textarea { flex: 1; resize: none; font-size: 14px; padding: 10px 12px; }
+    .quick-foot { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+    .quick-foot input { flex: 1; }
+  </style>
+</head>
+<body>
+  <div class="quick">
+    <div class="quick-head">
+      <h2>快速记录 <span class="hint">Alt+N 呼出 / 隐藏</span></h2>
+      <button id="q-close" title="关闭">✕</button>
+    </div>
+    <textarea id="q-text" placeholder="记下想法…（Ctrl+Enter 保存）"></textarea>
+    <div class="quick-foot">
+      <input type="text" id="q-project" list="q-projects" placeholder="项目（可稍后补充）" />
+      <datalist id="q-projects"></datalist>
+      <button class="primary" id="q-save">保存</button>
+    </div>
+  </div>
+  <script src="quick.js"></script>
+</body>
+</html>

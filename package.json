@@ -1,0 +1,63 @@
+{
+  "name": "daily-notes",
+  "productName": "Daily Notes",
+  "version": "1.1.0",
+  "description": "单机个人笔记：每日记录、命令库、数据库视图与回顾",
+  "main": "main.js",
+  "private": true,
+  "type": "commonjs",
+  "author": "Daily Notes",
+  "license": "ISC",
+  "scripts": {
+    "start": "electron .",
+    "icon": "node scripts/make-icon.js",
+    "shortcuts": "node scripts/install-shortcuts.js",
+    "build": "node scripts/build.js",
+    "pack": "node scripts/build.js --dir"
+  },
+  "devDependencies": {
+    "electron": "^45.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "local.dailynotes.app",
+    "productName": "Daily Notes",
+    "copyright": "仅供本人单机使用",
+    "directories": {
+      "output": "release",
+      "buildResources": "assets"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "renderer/**/*",
+      "assets/icon.png",
+      "assets/icon.ico"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "artifactName": "${productName}-${version}-Setup.${ext}",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Daily Notes",
+      "uninstallDisplayName": "Daily Notes",
+      "deleteAppDataOnUninstall": false
+    }
+  }
+}

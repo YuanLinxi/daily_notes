@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self';" />
+  <title>Daily Notes</title>
+  <link rel="icon" href="../assets/icon.png" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <img src="../assets/icon.png" alt="" width="22" height="22" />
+        <span>Daily Notes</span>
+      </div>
+      <nav id="nav">
+        <button class="nav-item active" data-view="daily">
+          <span class="dot"></span>每日记录
+        </button>
+        <button class="nav-item" data-view="db">
+          <span class="dot"></span>数据库
+        </button>
+        <button class="nav-item" data-view="snippets">
+          <span class="dot"></span>命令记录
+        </button>
+        <button class="nav-item" data-view="projects">
+          <span class="dot"></span>项目
+        </button>
+        <button class="nav-item" data-view="review">
+          <span class="dot"></span>回顾
+        </button>
+        <button class="nav-item" data-view="settings">
+          <span class="dot"></span>设置
+        </button>
+      </nav>
+      <div class="sidebar-foot">
+        <button class="ghost" id="btn-hide">隐藏到托盘</button>
+        <button class="ghost" id="btn-quit">关闭软件</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <!-- 全局统一搜索 -->
+      <div class="global-search" id="global-search">
+        <input type="search" id="gs-q" placeholder="搜索全部内容：记录、命令…（Ctrl+K）" />
+        <div class="gs-results hidden" id="gs-results"></div>
+      </div>
+
+      <!-- 每日记录 -->
+      <section class="view view-full" id="view-daily">
+        <header class="view-head">
+          <div>
+            <h1>每日记录</h1>
+            <p class="sub" id="daily-sub"></p>
+          </div>
+          <div class="head-actions">
+            <input type="date" id="daily-date" />
+            <button class="primary" id="daily-new">新建今日记录</button>
+          </div>
+        </header>
+        <div class="daily-layout">
+          <div class="daily-list" id="daily-list"></div>
+          <div class="daily-editor" id="daily-editor"></div>
+        </div>
+      </section>
+
+      <!-- 数据库视图 -->
+      <section class="view hidden" id="view-db">
+        <header class="view-head">
+          <div>
+            <h1>数据库</h1>
+            <p class="sub">表格 · 看板 · 日历</p>
+          </div>
+          <div class="head-actions">
+            <div class="seg" id="db-views">
+              <button data-mode="table" class="active">表格</button>
+              <button data-mode="board">看板</button>
+              <button data-mode="calendar">日历</button>
+            </div>
+            <button class="primary" id="db-new">新建记录</button>
+          </div>
+        </header>
+        <div class="view-scroll">
+        <div class="filterbar" id="db-filter">
+          <input type="search" id="db-q" placeholder="搜索标题、正文、备注、项目…" />
+          <select id="db-project"><option value="">全部项目</option></select>
+          <select id="db-status">
+            <option value="">全部状态</option>
+            <option value="open">未完成（全部）</option>
+            <option value="todo">待办</option>
+            <option value="doing">进行中</option>
+            <option value="blocked">受阻</option>
+            <option value="done">已完成</option>
+          </select>
+          <input type="date" id="db-from" title="起始日期" />
+          <input type="date" id="db-to" title="结束日期" />
+          <select id="db-saved" title="保存的筛选"><option value="">保存的筛选…</option></select>
+          <button id="db-save-filter" title="把当前筛选保存下来">☆ 保存筛选</button>
+          <button id="db-trash">回收站</button>
+          <span class="count" id="db-count"></span>
+        </div>
+        <div class="db-body" id="db-body"></div>        </div>
+      </section>
+
+      <!-- 命令记录 -->
+      <section class="view hidden" id="view-snippets">
+        <header class="view-head">
+          <div>
+            <h1>代码命令记录</h1>
+            <p class="sub">按使用频率排序，单击即复制</p>
+          </div>
+          <div class="head-actions">
+            <button class="primary" id="sn-new">新增命令</button>
+          </div>
+        </header>
+        <div class="view-scroll">
+        <div class="filterbar">
+          <input type="search" id="sn-q" placeholder="搜索命令、标题、标签、语言…" />
+          <select id="sn-lang"><option value="">全部语言</option></select>
+        </div>
+        <div class="sn-list" id="sn-list"></div>
+        </div>
+      </section>
+
+      <!-- 项目主页 -->
+      <section class="view hidden" id="view-projects">
+        <header class="view-head">
+          <div><h1>项目</h1><p class="sub">目标、进展、未完成任务与相关命令</p></div>
+        </header>
+        <div class="view-scroll">
+        <div class="proj-layout">
+          <div class="proj-list" id="proj-list"></div>
+          <div class="proj-page" id="proj-page"></div>
+        </div>
+        </div>
+      </section>
+
+      <!-- 回顾 -->
+      <section class="view hidden" id="view-review">
+        <header class="view-head">
+          <div>
+            <h1>回顾</h1>
+            <p class="sub">记录频率与时间分布</p>
+          </div>
+          <div class="head-actions">
+            <select id="rv-year"></select>
+          </div>
+        </header>
+        <div class="view-scroll">
+        <div class="stat-row" id="rv-stats"></div>
+        <div class="panel">
+          <div class="panel-head"><h2>热力图</h2><span class="hint" id="rv-legend"></span></div>
+          <div class="heatmap" id="rv-heatmap"></div>
+          <div class="panel-head sub-head"><h2>时间段分布</h2></div>
+          <div class="hours" id="rv-hours"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <h2>时间轴</h2>
+            <div class="row-gap">
+              <button id="rv-weekly">生成本周周报</button>
+              <select id="rv-project"><option value="">全部项目</option></select>
+            </div>
+          </div>
+          <div class="timeline" id="rv-timeline"></div>
+        </div>
+        </div>
+      </section>
+
+      <!-- 设置 -->
+      <section class="view hidden" id="view-settings">
+        <header class="view-head"><div><h1>设置</h1><p class="sub">仅本机使用</p></div></header>
+        <div class="view-scroll">
+        <div class="panel">
+          <div class="panel-head"><h2>自动备份</h2>
+            <div class="row-gap">
+              <span class="hint" id="bk-info"></span>
+              <button id="bk-now">立即备份</button>
+            </div>
+          </div>
+          <p class="hint" style="padding: 10px 18px 0">每天有改动时自动备份一次（保存在数据库同目录的 backups 文件夹），保留最近 30 份。点击任意备份可查看并恢复。</p>
+          <div class="bk-list" id="bk-list"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>数据库位置</h2></div>
+          <div class="setting-row">
+            <div>
+              <p class="mono" id="set-dbpath"></p>
+              <p class="hint" id="set-config"></p>
+            </div>
+            <div class="row-gap">
+              <button id="set-reveal">在文件夹中显示</button>
+              <button id="set-change">更改位置</button>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>记录模板</h2><span class="hint">变量：{{date}} {{time}} {{week}} {{project}}</span></div>
+          <div class="row-gap" style="padding: 12px 18px 0">
+            <button id="tpl-new">新建模板</button>
+          </div>
+          <div class="tpl-list" id="tpl-list"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>通用格式导出</h2><span class="hint">Markdown / HTML（可打印为 PDF）</span></div>
+          <div class="setting-row">
+            <div class="row-gap">
+              <input type="date" id="ex-from" title="起始日期" />
+              <input type="date" id="ex-to" title="结束日期" />
+              <select id="ex-project"><option value="">全部项目</option></select>
+            </div>
+            <div class="row-gap">
+              <button id="ex-md">导出 Markdown</button>
+              <button id="ex-html">导出 HTML</button>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>全局快捷记录</h2></div>
+          <div class="setting-row">
+            <p class="hint">按 <b>Alt+N</b> 随时呼出小窗口记下想法，保存进每日记录（状态为待办）。<br/>失焦自动隐藏，可在下方开关。</p>
+            <button id="hotkey-toggle">快捷键：已开启</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>数据导入与导出</h2><span class="hint">用于在另一台安装了本软件的电脑上互通数据</span></div>
+          <div class="transfer-grid">
+            <div class="transfer-box">
+              <h3>合并数据（JSON）</h3>
+              <p class="hint">导出全部记录与命令为可读 JSON。导入时按内容去重，只补充本机没有的条目，不会改动已有数据。</p>
+              <div class="row-gap">
+                <button id="tf-export-json">导出 JSON</button>
+                <button id="tf-import-json">从 JSON 导入</button>
+              </div>
+            </div>
+            <div class="transfer-box">
+              <h3>整库快照（SQLite）</h3>
+              <p class="hint">导出完整数据库文件，适合在另一台电脑上原样恢复。恢复会覆盖本机全部数据，操作前自动备份当前库。</p>
+              <div class="row-gap">
+                <button id="tf-export-db">导出整库</button>
+                <button id="tf-restore-db" class="danger">从整库恢复</button>
+              </div>
+            </div>
+          </div>
+          <p class="hint transfer-note" id="tf-note"></p>
+        </div>
+        </div>
+      </section>
+    </main>
+
+  <div class="modal-mask hidden" id="modal-mask">
+    <div class="modal" id="modal"><div id="modal-body"></div></div>
+  </div>
+
+  <div class="toast hidden" id="toast"></div>
+
+  <script src="richtext.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

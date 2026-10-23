@@ -1,0 +1,49 @@
+/* ---------- P1：全局搜索 / 项目 / 状态 / 模板 ---------- */
+.global-search { position: relative; margin-bottom: 10px; max-width: 520px; flex-shrink: 0; }
+.global-search input { width: 100%; }
+.gs-results {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 40;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(28,27,25,.14); margin-top: 4px; max-height: 420px; overflow: auto;
+}
+.gs-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--line-soft); }
+.gs-item:hover { background: #f6f3ed; }
+.gs-item .gs-t { font-weight: 550; white-space: nowrap; }
+.gs-item .gs-snip { color: var(--ink-2); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.gs-empty { padding: 16px; text-align: center; color: var(--ink-3); }
+
+.tag.st-todo { background: #eef0f4; color: #4a5568; }
+.tag.st-doing { background: #e7eef7; color: #33557e; }
+.tag.st-blocked { background: #f7e9e7; color: #8f3f36; }
+.tag.st-done { background: #eaf1ec; color: var(--green); }
+.tag.overdue { background: #f7e9e7; color: var(--red); }
+.overdue-text { color: var(--red); }
+
+.proj-layout { display: grid; grid-template-columns: 240px 1fr; gap: 18px; align-items: start; }
+.proj-list { display: flex; flex-direction: column; gap: 6px; }
+.proj-item { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; cursor: pointer; }
+.proj-item:hover { border-color: #d6d1c8; }
+.proj-item.active { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
+.proj-item .t { font-weight: 600; }
+.proj-page { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; }
+.proj-page textarea { width: 100%; margin-top: 10px; }
+.task-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line-soft); }
+.task-row:last-child { border-bottom: 0; }
+.task-row .task-t { flex: 1; }
+.tpl-list { display: flex; flex-direction: column; padding: 10px 18px 14px; gap: 6px; }
+.thread-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: #eef3f7; border: 1px solid #d3e0ec; color: #33557e;
+  border-radius: 6px; padding: 6px 12px; margin-bottom: 10px; font-size: 12.5px;
+}
+.batch-bar {
+  display: flex; align-items: center; gap: 8px; padding: 9px 12px;
+  border-top: 1px solid var(--line); background: #f7f5f1; font-size: 12.5px;
+}
+.col-menu {
+  position: fixed; z-index: 80; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px; box-shadow: 0 12px 32px rgba(28,27,25,.16); padding: 8px 0; min-width: 140px;
+}
+.col-menu-item { display: flex; align-items: center; gap: 8px; padding: 5px 12px; cursor: pointer; }
+.col-menu-item:hover { background: #f6f3ed; }
+.col-menu-item input { accent-color: var(--accent); }

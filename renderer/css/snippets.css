@@ -1,0 +1,19 @@
+/* ---------- 命令记录 ---------- */
+.sn-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; }
+.sn-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+.sn-card:hover { border-color: #d6d1c8; }
+.sn-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.sn-card .t { font-weight: 600; }
+.sn-card .lang { font-size: 11px; color: var(--ink-3); }
+.sn-cmd {
+  position: relative; margin: 8px 0; background: #f7f5f1; border: 1px solid var(--line-soft);
+  border-radius: 5px; padding: 8px 10px; font-family: var(--mono); font-size: 12.5px;
+  white-space: pre-wrap; word-break: break-all; cursor: pointer;
+}
+.sn-cmd:hover { background: #f1eee8; }
+.sn-cmd .copy { position: absolute; right: 6px; top: 4px; font-size: 11px; color: var(--ink-3); }
+.sn-meta { display: flex; justify-content: space-between; align-items: flex-end; gap: 8px; }
+.sn-meta .r { color: var(--ink-2); font-size: 12.5px; }
+.sn-actions { display: flex; gap: 2px; }
+.sn-actions button { border: 0; background: none; color: var(--ink-3); font-size: 12px; padding: 2px 6px; }
+.sn-actions button:hover { color: var(--ink); }

@@ -1,0 +1,38 @@
+/* ---------- 回顾 ---------- */
+.stat-row { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-bottom: 18px; }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+.stat .v { font-size: 22px; font-weight: 600; letter-spacing: -.3px; }
+.stat .k { font-size: 11.5px; color: var(--ink-3); }
+
+.heatmap { padding: 16px 18px 10px; overflow-x: auto; }
+.hm-wrap { display: flex; gap: 6px; }
+.hm-dows { display: grid; grid-template-rows: repeat(7, 12px); gap: 3px; padding-top: 18px; font-size: 9.5px; color: var(--ink-3); }
+.hm-dows span { line-height: 12px; height: 12px; }
+.hm-cols { display: flex; gap: 3px; }
+.hm-col { display: grid; grid-template-rows: repeat(7, 12px); gap: 3px; }
+.hm-col .m { font-size: 9.5px; color: var(--ink-3); height: 15px; line-height: 12px; }
+.hm-cell { width: 12px; height: 12px; border-radius: 2px; background: #f0ede7; }
+.hm-cell.l1 { background: #e3d3ba; }
+.hm-cell.l2 { background: #cfb68f; }
+.hm-cell.l3 { background: #b08d57; }
+.hm-cell.l4 { background: #7d5f35; }
+.hm-cell.today { outline: 1px solid var(--ink); outline-offset: 1px; }
+.hm-legend { display: inline-flex; gap: 3px; align-items: center; }
+.hm-legend .hm-cell { display: inline-block; }
+
+.hours { display: flex; align-items: flex-end; gap: 4px; height: 110px; padding: 16px 18px; }
+.hour { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; height: 100%; }
+.hour .bar { width: 100%; background: var(--accent); border-radius: 2px 2px 0 0; min-height: 1px; opacity: .85; }
+.hour .lbl { font-size: 9.5px; color: var(--ink-3); }
+
+.timeline { padding: 8px 18px 18px 28px; position: relative; }
+.timeline:before { content: ""; position: absolute; left: 12px; top: 10px; bottom: 18px; width: 1px; background: var(--line); }
+.tl-item { position: relative; padding: 10px 0 10px 14px; }
+.tl-item:before {
+  content: ""; position: absolute; left: -20px; top: 17px; width: 7px; height: 7px;
+  border-radius: 50%; background: #fff; border: 1.5px solid var(--accent);
+}
+.tl-item .d { font-size: 11.5px; color: var(--ink-3); }
+.tl-item .t { font-weight: 550; margin-top: 1px; }
+.tl-item .c { color: var(--ink-2); font-size: 12.5px; white-space: pre-wrap; }
+.tl-item .m { margin-top: 4px; display: flex; gap: 6px; flex-wrap: wrap; }

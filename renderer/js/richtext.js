@@ -1,22 +1,10 @@
-// 富媒体编辑：文本 / 图片 / 思维导图 / 手绘
+// 富媒体编辑：文本 / 图片 / 视频 / 思维导图 / 手绘
 // 思维导图与手绘以 <div data-widget="mindmap|draw"> 嵌入正文，数据存于 content_json，可再次编辑。
-(function () {
-  const uid = () => 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+import { h as el } from './core/dom.js';
 
-  function el(tag, props = {}, ...children) {
-    const n = document.createElement(tag);
-    for (const [k, v] of Object.entries(props)) {
-      if (k === 'class') n.className = v;
-      else if (k === 'text') n.textContent = v;
-      else if (k === 'style' && typeof v === 'object') Object.assign(n.style, v);
-      else if (k.startsWith('on')) n.addEventListener(k.slice(2).toLowerCase(), v);
-      else n.setAttribute(k, v);
-    }
-    for (const c of children) if (c) n.append(c);
-    return n;
-  }
+const uid = () => 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
-  // ---------- 思维导图 ----------
+// ---------- 思维导图 ----------
   function mindmapToTree(map) {
     const nodes = new Map();
     for (const n of map.nodes) nodes.set(n.id, { ...n, children: [] });
@@ -555,10 +543,4 @@
     return { getValue, setValue, insertHtml: (html) => { editor.focus(); document.execCommand('insertHTML', false, html); sync(); }, focus: () => editor.focus(), editor };
   }
 
-  window.RichMedia = {
-    createEditor,
-    mindmapToText,
-    renderMindmap,
-    renderDraw,
-  };
-})();
+export { createEditor, mindmapToText, renderMindmap, renderDraw };

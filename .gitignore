@@ -35,3 +35,6 @@ Thumbs.db
 !.vscode/launch.json
 !.vscode/extensions.json
 .idea/
+
+# ---- 工具目录 ----
+.claude/

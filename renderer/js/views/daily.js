@@ -98,11 +98,8 @@ export async function openNoteEditor(note, opts = {}) {
   highlightActiveRow();
 }
 
-let rendering = false;
 
 export async function renderNoteEditor(keepList) {
-  if (rendering) return;
-  rendering = true;
   try {
     const n = state.editing;
     const host = $('#daily-editor');
@@ -286,17 +283,16 @@ export async function renderNoteEditor(keepList) {
     });
 
     state.saveCurrent = saveNote;
+    window.rteSave = () => state.saveCurrent?.();
     state.currentDraftKey = draftKey;
 
     await loadDaily();
-    rendering = false;
     restoreDraftIfAny({
       n, editor,
       onAccept: queueAutoSave,
       inputs: { titleInput, remarkInput, dateInput, startInput, finishInput },
     });
   } catch (e) {
-    rendering = false;
     console.error('renderNoteEditor failed:', e);
   }
 }

@@ -72,3 +72,52 @@ export function askText({ title = '输入', placeholder = '', x = null, y = null
     document.addEventListener('keydown', onKey, true);
   });
 }
+
+// 确认对话框：返回 Promise<boolean>
+export function confirmDialog({ title = '确认', message = '', okText = '确定', cancelText = '取消' } = {}) {
+  return new Promise((resolve) => {
+    const mask = document.createElement('div');
+    mask.style.cssText = 'position:fixed;inset:0;z-index:120;background:rgba(28,27,25,.28);display:flex;align-items:center;justify-content:center';
+
+    const box = document.createElement('div');
+    box.style.cssText = 'background:#fff;border:1px solid #e7e3dc;border-radius:8px;padding:18px 20px;'
+      + 'width:min(420px,90vw);box-shadow:0 16px 44px rgba(28,27,25,.2)';
+
+    const h2 = document.createElement('div');
+    h2.textContent = title;
+    h2.style.cssText = 'font-size:15px;font-weight:600;margin-bottom:10px';
+
+    const msg = document.createElement('div');
+    msg.textContent = message;
+    msg.style.cssText = 'font-size:13px;line-height:1.7;color:#56524b;white-space:pre-wrap;margin-bottom:16px';
+
+    const foot = document.createElement('div');
+    foot.style.cssText = 'display:flex;justify-content:flex-end;gap:8px';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = cancelText;
+    const okBtn = document.createElement('button');
+    okBtn.textContent = okText;
+    okBtn.className = 'primary';
+    foot.append(cancelBtn, okBtn);
+
+    box.append(h2, msg, foot);
+    mask.append(box);
+    document.body.append(mask);
+
+    const done = (val) => {
+      document.removeEventListener('keydown', onKey, true);
+      mask.remove();
+      resolve(val);
+    };
+    cancelBtn.onclick = () => done(false);
+    okBtn.onclick = () => done(true);
+    mask.addEventListener('mousedown', (e) => { if (e.target === mask) done(false); });
+    const onKey = (e) => {
+      if (!mask.isConnected) return;
+      if (e.key === 'Escape') { e.preventDefault(); done(false); }
+      if (e.key === 'Enter') { e.preventDefault(); done(true); }
+    };
+    document.addEventListener('keydown', onKey, true);
+    okBtn.focus();
+  });
+}

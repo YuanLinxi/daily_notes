@@ -1,7 +1,7 @@
 // 富媒体编辑：文本 / 图片 / 视频 / 思维导图 / 手绘
 // 思维导图与手绘以 <div data-widget="mindmap|draw"> 嵌入正文，数据存于 content_json，可再次编辑。
 import { h as el } from './core/dom.js';
-import { askText } from './core/prompt.js';
+import { askText, confirmDialog } from './core/prompt.js';
 
 const uid = () => 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
@@ -100,8 +100,10 @@ function createViewport({ isDraw = false, onPanStart } = {}) {
   window.addEventListener('keyup', onKeyUp);
 
   viewport.addEventListener('pointerdown', (e) => {
-    const isMiddle = e.button === 1;
-    const wantPan = isMiddle || spaceDown || (!isDraw && e.button === 0);
+    if (e.button !== 0 && e.button !== 1) return;
+    // 中键、空格，或点在空白处（不是可交互节点）时才平移
+    const onNode = e.target.closest?.('.mm-node');
+    const wantPan = e.button === 1 || spaceDown || (!isDraw && e.button === 0 && !onNode);
     if (!wantPan) return;
     e.preventDefault();
     e.stopPropagation();
@@ -254,7 +256,10 @@ function moveItem(it, dx, dy) {
     const lines = [];
     const walk = (node, depth) => {
       if (!node) return;
-      lines.push('  '.repeat(depth) + node.text);
+      // 多行节点的后续行以 "  |" 前缀延续，避免被解析为独立节点
+      const ls = String(node.text || '').split('\n');
+      lines.push('  '.repeat(depth) + ls[0]);
+      for (let i = 1; i < ls.length; i++) lines.push('  '.repeat(depth) + '| ' + ls[i]);
       node.children.forEach((c) => walk(c, depth + 1));
     };
     walk(root, 0);
@@ -265,8 +270,16 @@ function moveItem(it, dx, dy) {
     const nodes = [];
     let rootId = null;
     let lastAtDepth = [];
+    let lastNodeId = null; // 多行节点续行（"|" 前缀）归属
     for (const raw of text.split('\n')) {
       if (!raw.trim()) continue;
+      // 续行：缩进后以 "| " 开头，追加到上一个节点
+      const cont = raw.match(/^(\s*)\|\s?(.*)$/);
+      if (cont && lastNodeId) {
+        const node = nodes.find((n) => n.id === lastNodeId);
+        if (node) node.text += '\n' + cont[2];
+        continue;
+      }
       const depth = Math.floor((raw.match(/^ */)[0].length) / 2);
       const id = uid();
       lastAtDepth[depth] = id;
@@ -274,6 +287,7 @@ function moveItem(it, dx, dy) {
       const parent = depth > 0 ? lastAtDepth[depth - 1] || rootId : null;
       if (!parent) rootId = id;
       nodes.push({ id, parent, text: raw.trim() });
+      lastNodeId = id;
     }
     if (!rootId) {
       rootId = uid();
@@ -338,22 +352,60 @@ function moveItem(it, dx, dy) {
       vp.inner.append(host);
       vp.inner.querySelectorAll('.mm-node').forEach((n) => {
         if (n.dataset.id === selected) n.classList.add('active');
-        n.addEventListener('click', (e) => { e.stopPropagation(); selected = n.dataset.id; draw(); });
-        n.addEventListener('dblclick', (e) => {
-          e.stopPropagation();
-          const node = state.nodes.find((x) => x.id === n.dataset.id);
-          const input = el('input', { type: 'text', value: node.text, style: { width: Math.max(120, node.text.length * 14) + 'px', padding: '1px 4px' } });
-          n.replaceWith(input);
-          input.focus(); input.select();
-          const commit = () => { node.text = input.value.trim() || node.text; draw(); };
-          input.addEventListener('blur', commit);
-          input.addEventListener('keydown', (ev) => {
-            if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
-            if (ev.key === 'Escape') { input.value = node.text; input.blur(); }
-            ev.stopPropagation();
-          });
-        });
+        // 单击只更新选中态，不重建 DOM——重建会打断浏览器的 dblclick 识别
+        n.addEventListener('click', (e) => { e.stopPropagation(); selected = n.dataset.id; updateActive(); });
+        n.addEventListener('dblclick', (e) => { e.stopPropagation(); startRename(n, n.dataset.id); });
       });
+    }
+
+    // 只切换高亮，不重建 DOM
+    function updateActive() {
+      vp.inner.querySelectorAll('.mm-node').forEach((m) => m.classList.toggle('active', m.dataset.id === selected));
+    }
+
+    // 双击进入改名：把节点替换为多行输入框（Shift+Enter 换行，Enter 提交，Esc 取消）
+    function startRename(nodeEl, id) {
+      const node = state.nodes.find((x) => x.id === id);
+      if (!node) return;
+      const lines = node.text.split('\n');
+      const ta = el('textarea', {
+        rows: Math.max(1, lines.length),
+        style: {
+          minWidth: '160px', width: Math.max(160, Math.max(...lines.map((l) => l.length)) * 12 + 30) + 'px',
+          padding: '2px 6px', fontSize: 'inherit', lineHeight: '1.5',
+          resize: 'none', overflow: 'hidden', fontFamily: 'inherit',
+          display: 'block',
+        },
+      });
+      ta.value = node.text;
+      nodeEl.replaceWith(ta);
+      ta.focus();
+      ta.select();
+
+      let settled = false;
+      const commit = () => {
+        if (settled) return;
+        settled = true;
+        const v = ta.value.replace(/\s+$/g, '');
+        if (v) node.text = v;
+        draw();
+      };
+      const cancel = () => {
+        if (settled) return;
+        settled = true;
+        draw();
+      };
+      ta.addEventListener('blur', commit);
+      ta.addEventListener('keydown', (ev) => {
+        ev.stopPropagation();
+        if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); ta.blur(); }
+        if (ev.key === 'Escape') { ta.value = node.text; ta.blur(); }
+      });
+      ta.addEventListener('pointerdown', (ev) => ev.stopPropagation()); // 防止触发画布平移
+      // 输入时自动增高
+      const grow = () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; };
+      ta.addEventListener('input', grow);
+      requestAnimationFrame(grow);
     }
 
     function addNode(sibling) {
@@ -936,6 +988,7 @@ function moveItem(it, dx, dy) {
     });
 
     editor.addEventListener('input', sync);
+    bindMediaSelect();
     editor.addEventListener('click', (e) => {
       const host = e.target.closest('[data-widget]');
       if (!host) return;
@@ -958,20 +1011,187 @@ function moveItem(it, dx, dy) {
       insertImgNode(await readImage(file), file.name);
     }
 
+    // 浏览器支持的视频 MIME 类型（Chromium 不支持 MPEG-4 Part 2 / mp4v 等）
+    const SUPPORTED_VIDEO = [
+      'video/mp4; codecs="avc1.42E01E"',   // H.264
+      'video/mp4; codecs="avc1.640028"',
+      'video/mp4; codecs="hev1.1.6.L93.B0"',
+      'video/webm; codecs="vp8"',
+      'video/webm; codecs="vp9"',
+      'video/webm; codecs="av01.0.05M.08"',
+      'video/ogg; codecs="theora"',
+    ];
+
+    // 解析一段 MP4 字节（通常是整个 moov box），收集 stsd 中的编码 fourcc
+    function findMp4Codecs(bytes) {
+      const codecs = [];
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const CONTAINERS = new Set(['moov', 'trak', 'mdia', 'minf', 'stbl', 'edts', 'dinf', 'mvex']);
+      const str4 = (i) => String.fromCharCode(bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]);
+
+      const readBoxes = function* (start, end) {
+        let off = start;
+        while (off + 8 <= end) {
+          let size = view.getUint32(off);
+          const type = str4(off + 4);
+          let hdr = 8;
+          if (size === 1) {
+            const hi = view.getUint32(off + 8), lo = view.getUint32(off + 12);
+            size = hi * 4294967296 + lo;
+            hdr = 16;
+          }
+          if (size === 0) size = end - off;
+          if (size < hdr || off + size > end) return;
+          yield { type, off, size, hdr };
+          off += size;
+        }
+      };
+
+      const walk = (start, end) => {
+        for (const b of readBoxes(start, end)) {
+          if (b.type === 'stsd') {
+            const count = view.getUint32(b.off + b.hdr + 4);
+            for (let i = 0; i < count; i++) {
+              const e = b.off + b.hdr + 8 + i * 32;
+              if (e + 8 > end) break;
+              codecs.push(str4(e + 4));
+            }
+          }
+          if (CONTAINERS.has(b.type)) walk(b.off + b.hdr, b.off + b.size);
+        }
+      };
+      try { walk(0, bytes.length); } catch { /* 解析失败不阻断 */ }
+      return [...new Set(codecs)];
+    }
+
+    // 读取文件指定区间（分块读，避免一次性载入大文件）
+    async function readRange(file, start, length) {
+      const buf = await file.slice(start, start + length).arrayBuffer();
+      return new Uint8Array(buf);
+    }
+
+    // 定位顶层 box；moov 可能在文件头或文件尾，需要按 size 跳读
+    async function locateMoov(file) {
+      let off = 0;
+      let guard = 0;
+      while (off + 8 <= file.size && guard++ < 64) {
+        const hdr = await readRange(file, off, 16);
+        if (hdr.length < 8) return null;
+        const view = new DataView(hdr.buffer, hdr.byteOffset, hdr.byteLength);
+        let size = view.getUint32(0);
+        const type = String.fromCharCode(hdr[4], hdr[5], hdr[6], hdr[7]);
+        if (size === 1) {
+          if (hdr.length < 16) return null;
+          size = view.getUint32(8) * 4294967296 + view.getUint32(12);
+        }
+        if (size === 0) size = file.size - off;
+        if (size < 8) return null;
+        if (type === 'moov') return { offset: off, size };
+        off += size;
+      }
+      return null;
+    }
+
+    // 检测浏览器能否播放该文件：解析容器与编码
+    async function probeVideoSupport(file) {
+      const probe = document.createElement('video');
+      const byType = SUPPORTED_VIDEO.some((t) => probe.canPlayType(t) !== '');
+      if (!byType) return { ok: false, reason: '当前浏览器不支持所选视频格式' };
+      try {
+        const head = await readRange(file, 0, 16);
+        const isMp4 = head.length >= 8 && head[4] === 0x66 && head[5] === 0x74 && head[6] === 0x79 && head[7] === 0x70;
+        let codecs = [];
+        if (isMp4) {
+          // moov 可能位于文件头或文件尾，先定位再整段读取解析
+          const moov = await locateMoov(file);
+          if (moov && moov.size <= 16 * 1024 * 1024) {
+            const bytes = await readRange(file, moov.offset, moov.size);
+            codecs = findMp4Codecs(bytes);
+          }
+        } else {
+          const probeBytes = await readRange(file, 0, Math.min(file.size, 8192));
+          const text = String.fromCharCode(...probeBytes);
+          codecs = ['avc1', 'hvc1', 'hev1', 'vp09', 'vp08', 'av01', 'mp4v', 'mjpg', 'divx', 'xvid']
+            .filter((c) => text.includes(c));
+        }
+        if (codecs.includes('mp4v')) {
+          return { ok: false, reason: '该视频使用 MPEG-4 Part 2（mp4v）编码，浏览器无法解码，需先转码为 H.264' };
+        }
+        if (codecs.includes('mjpg') || codecs.includes('jpeg')) {
+          return { ok: false, reason: '该视频为 MJPEG 编码，浏览器无法解码，需先转码为 H.264' };
+        }
+        if (codecs.includes('xvid') || codecs.includes('divx')) {
+          return { ok: false, reason: '该视频为 DivX/Xvid 编码，浏览器无法解码，需先转码为 H.264' };
+        }
+      } catch { /* 探测失败不阻断插入 */ }
+      return { ok: true };
+    }
+
     async function insertVideo() {
-      const [file] = await pickFile('video/mp4,video/webm,video/ogg,video/quicktime');
+      const [file] = await pickFile('video/mp4,video/webm,video/ogg,video/quicktime,video/x-matroska,.mkv,.mov,.avi');
       if (!file) return;
       if (file.size > 200 * 1024 * 1024) {
         alert('视频超过 200MB，建议压缩后再插入（视频会以 base64 存入数据库）。');
         return;
       }
-      insertNode(el('video', {
+      // 编码检测：浏览器无法解码的格式给出明确提示，避免插入后黑屏无声
+      const support = await probeVideoSupport(file);
+      if (!support.ok) {
+        const go = await confirmDialog({
+          title: '该视频可能无法播放',
+          message: `${support.reason}。\n\n可先用转码工具（如 ffmpeg）转为 H.264 后再插入。\n\n仍要插入吗？`,
+          okText: '仍然插入',
+          cancelText: '取消',
+        });
+        if (!go) return;
+      }
+      const wrap = el('div', { class: 'media-wrap' });
+      const v = el('video', {
         src: await readImage(file),
         controls: 'controls',
-        preload: 'metadata',
+        preload: 'auto',
+        playsinline: 'playsinline',
         class: 'rte-video',
         title: file.name,
-      }));
+      });
+      v.dataset.media = 'video';
+      const del = el('button', {
+        class: 'media-del', type: 'button', title: '删除视频', text: '✕',
+        onclick: (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          wrap.remove();
+          sync();
+        },
+      });
+      wrap.append(v, del);
+      insertNode(wrap);
+      // 加载失败时给出可见提示（编码不受浏览器支持时会出现）
+      v.addEventListener('error', () => {
+        if (wrap.querySelector('.media-error')) return;
+        const tip = el('div', { class: 'media-error', text: '⚠ 该视频无法解码，编码可能不受浏览器支持（建议转为 H.264）' });
+        wrap.append(tip);
+      });
+    }
+
+    // 图片同样包一层，带上删除按钮（图片本身可以原生选中，这里统一交互）
+    function bindMediaSelect() {
+      // 图片：点击后高亮，Delete 可删
+      editor.addEventListener('click', (e) => {
+        const media = e.target.closest?.('img[data-media]');
+        $$('.media-selected', editor).forEach((m) => m.classList.remove('media-selected'));
+        if (media) media.classList.add('media-selected');
+      });
+      editor.addEventListener('keydown', (e) => {
+        const sel = $('.media-selected', editor);
+        if (!sel) return;
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+          e.preventDefault();
+          sel.remove();
+          sync();
+        }
+        if (e.key === 'Escape') sel.classList.remove('media-selected');
+      });
     }
 
     function pickFile(accept) {
@@ -1008,7 +1228,20 @@ function moveItem(it, dx, dy) {
     }
 
     function insertImgNode(src, alt = '') {
-      insertNode(el('img', { src, alt }));
+      const wrap = el('div', { class: 'media-wrap' });
+      const img = el('img', { src, alt });
+      img.dataset.media = 'image';
+      const del = el('button', {
+        class: 'media-del', type: 'button', title: '删除图片', text: '✕',
+        onclick: (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          wrap.remove();
+          sync();
+        },
+      });
+      wrap.append(img, del);
+      insertNode(wrap);
     }
 
     async function insertMindmap() {
@@ -1067,6 +1300,24 @@ function moveItem(it, dx, dy) {
         const fresh = d.kind === 'mindmap' ? renderMindmap(d) : renderDraw(d);
         fresh.title = n.title || (d.kind === 'mindmap' ? '双击或单击可再次编辑' : '单击可再次编辑');
         n.replaceWith(fresh);
+      });
+      // 为存量媒体元素补上包装与删除按钮（兼容旧数据）
+      editor.querySelectorAll('img[data-media], video[data-media]').forEach((m) => {
+        if (m.parentElement?.classList.contains('media-wrap')) return;
+        const wrap = el('div', { class: 'media-wrap' });
+        const del = el('button', {
+          class: 'media-del', type: 'button', title: '删除', text: '✕',
+          onclick: (e) => { e.preventDefault(); e.stopPropagation(); wrap.remove(); sync(); editor.dispatchEvent(new Event('input', { bubbles: true })); window.rteSave?.(); },
+        });
+        m.replaceWith(wrap);
+        wrap.append(m, del);
+        // 视频解码失败时给出提示（存量数据同样适用）
+        if (m.tagName === 'VIDEO') {
+          m.addEventListener('error', () => {
+            if (wrap.querySelector('.media-error')) return;
+            wrap.append(el('div', { class: 'media-error', text: '⚠ 该视频无法解码，编码可能不受浏览器支持（建议转为 H.264）' }));
+          });
+        }
       });
     }
 
